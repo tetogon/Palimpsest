@@ -1,0 +1,5 @@
+{
+  "before": {"R": ["real entry"]},
+  "open": "D",
+  "after": {"D": ["decoy entry"], "R": null}
+}
