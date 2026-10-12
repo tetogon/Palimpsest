@@ -1,0 +1,5 @@
+# One compiler for every build (this machine, CI, F-Droid), so the native library is the same.
+[toolchain]
+channel = "1.99.0"
+profile = "minimal"
+targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"]

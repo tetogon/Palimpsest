@@ -1,0 +1,40 @@
+[package]
+name = "palimpsest-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Container format v1 for Palimpsest: deniable multi-vault encrypted diary"
+publish = false
+
+[lib]
+name = "palimpsest_core"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dependencies]
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "zeroize"] }
+blake2 = "0.10"
+chacha20poly1305 = "0.10"
+getrandom = "0.2"
+thiserror = "1"
+unicode-normalization = "0.1"
+uniffi = { version = "0.28", features = ["cli"] }
+zeroize = "1"
+
+[dev-dependencies]
+flate2 = "1"
+hex = "0.4"
+serde_json = "1"
+tempfile = "3"
+
+# Argon2id at 64 MiB is unbearably slow unoptimised; keep our crate debuggable.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

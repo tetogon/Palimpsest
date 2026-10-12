@@ -1,0 +1,10 @@
+# 16 KB ELF segment alignment, required on 16 KB-page Android devices (Pixel 8+ dev
+# option, mandatory for Google Play from late 2025). NDK r27 still defaults to 4 KB.
+[target.aarch64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.x86_64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
