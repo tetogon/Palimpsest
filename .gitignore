@@ -1,0 +1,15 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.kotlin/
+target/
+.claude/settings.local.json
+keystore.properties
+*.jks
+*.keystore
+
+/dist/

@@ -1,0 +1,8 @@
+# Line endings fixed in the repository, whatever the checkout's settings.
+* text=auto eol=lf
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.png binary
+*.jpg binary
