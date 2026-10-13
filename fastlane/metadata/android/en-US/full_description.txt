@@ -1,0 +1,29 @@
+<p>Palimpsest is an encrypted diary and notes app with <b>deniable vaults</b>: one password field, any number of vaults, and no way to tell from the file how many there are. Every password opens its own vault. A decoy password shows a believable diary; another shows the real one.</p>
+
+<p><b>Experimental, not audited.</b> It protects against a curious partner, a thief and a quick border check. It does not protect against a forensic lab, spyware on the phone, or someone who keeps demanding passwords. If an adversary keeps copies of the file from different moments and knows a decoy password, a hidden vault can give itself away. The threat model in the source repository has the details.</p>
+
+<p><b>Writing</b></p>
+<ul>
+<li>Notes in a grid with folders, tags, pins and colours; a diary with a timeline and a month calendar; to-dos</li>
+<li>Markdown editor that hides the markers away from the line you edit</li>
+<li>Photos and voice notes captured in memory, never in the gallery; photos cropped before they are stored, EXIF and location dropped</li>
+<li>Links between entries, backlinks and a graph of links where you link entries by dragging one onto another</li>
+<li>Search, search inside an entry, trash with 30-day expiry</li>
+</ul>
+
+<p><b>Vaults</b></p>
+<ul>
+<li>Create, change the password, delete a vault (its blocks are overwritten in place)</li>
+<li>A one-shot rule: on the next opening of this vault, destroy the vault with password X</li>
+<li>Backup of everything, restore, export of one vault under its own password, import with merging</li>
+</ul>
+
+<p><b>Privacy</b></p>
+<ul>
+<li>No internet permission, no trackers, no ads</li>
+<li>Screenshots blocked unless you allow them; no preview in recent apps</li>
+<li>Incognito keyboard, no autofill, copied text cleared after 60 seconds</li>
+<li>Locks on screen off, after idle time and in the background</li>
+</ul>
+
+<p>The core is written in Rust: Argon2id, XChaCha20-Poly1305 and BLAKE2b; the container is a pile of 4096-byte blocks that all look like random bytes, with random chaff added all the time.</p>

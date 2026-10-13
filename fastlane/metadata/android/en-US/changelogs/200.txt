@@ -1,0 +1,5 @@
+First release.
+- Notes, diary with calendar, to-dos
+- Markdown editor, photos and voice notes in memory
+- Links between entries and a graph of links
+- Deniable vaults, one-shot destroy rule, backup, export and import
