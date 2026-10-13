@@ -1,0 +1,57 @@
+name: Release draft
+
+# Pushing a tag v1.2.3 builds the universal APK without a signature and opens a draft
+# release with it. The release key never comes here: the APK is signed offline before the
+# draft is published. GitHub adds the source code archives to the release by itself.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    name: Unsigned APK and draft release
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 27.2.12479018
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core-rs
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: Install NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Tag matches versionName
+        run: |
+          version=$(sed -n 's/^ *versionName = "\(.*\)"/\1/p' app/build.gradle.kts)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME but app/build.gradle.kts says versionName $version"
+            exit 1
+          fi
+      - name: Build
+        # No keystore.properties here, so the release APK comes out unsigned.
+        run: ./gradlew :app:testReleaseUnitTest :app:assembleRelease --console=plain
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk="palimpsest-${GITHUB_REF_NAME}-unsigned.apk"
+          cp app/build/outputs/apk/release/app-release-unsigned.apk "$apk"
+          sha256sum "$apk"
+          gh release create "$GITHUB_REF_NAME" "$apk" --draft --generate-notes --title "Palimpsest $GITHUB_REF_NAME"
