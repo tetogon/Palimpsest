@@ -54,4 +54,6 @@ jobs:
           apk="palimpsest-${GITHUB_REF_NAME}-unsigned.apk"
           cp app/build/outputs/apk/release/app-release-unsigned.apk "$apk"
           sha256sum "$apk"
-          gh release create "$GITHUB_REF_NAME" "$apk" --draft --generate-notes --title "Palimpsest $GITHUB_REF_NAME"
+          # --target: if the tag is missing on GitHub by now (moved or deleted meanwhile), gh makes it
+          # on the commit this APK was built from instead of giving up.
+          gh release create "$GITHUB_REF_NAME" "$apk" --draft --generate-notes --title "Palimpsest $GITHUB_REF_NAME" --target "$GITHUB_SHA"
