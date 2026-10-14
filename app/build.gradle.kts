@@ -37,6 +37,17 @@ val cargoNdk by tasks.registering(Exec::class) {
     inputs.files(rustSources)
     outputs.dir(rustJniLibs)
     workingDir(rustDir)
+    // Panic messages carry source paths; mapping the checkout and the cargo registry to fixed
+    // names keeps the build machine's folders out of the .so, so the APK is reproducible.
+    // These flags replace target.*.rustflags from core-rs/.cargo, hence the page size again.
+    val cargoHome = System.getenv("CARGO_HOME")?.let(::File) ?: File(System.getProperty("user.home"), ".cargo")
+    val rustFlags = listOf(
+        "-C", "link-arg=-Wl,-z,max-page-size=16384",
+        "--remap-path-prefix=${rustDir.absolutePath}=/palimpsest",
+        "--remap-path-prefix=${cargoHome.absolutePath}=/cargo",
+    ).joinToString("\u001f")
+    inputs.property("rustflags", rustFlags)
+    environment("CARGO_ENCODED_RUSTFLAGS", rustFlags)
     commandLine(
         listOf(cargo, "ndk", "-P", "26") + rustAbis.flatMap { listOf("-t", it) } +
             listOf("-o", rustJniLibs.get().asFile.absolutePath, "build", "--release"),

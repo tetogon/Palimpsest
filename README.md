@@ -93,7 +93,7 @@ and [`cargo-ndk`](https://github.com/bbqsrc/cargo-ndk):
 
 ```sh
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
-cargo install cargo-ndk
+cargo install cargo-ndk --version 4.1.2 --locked
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
 ./gradlew :app:assembleRelease
 ```

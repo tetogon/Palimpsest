@@ -64,7 +64,7 @@ jobs:
           workspaces: core-rs
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-ndk
+          tool: cargo-ndk@4.1.2
       - name: Install NDK
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null
@@ -79,3 +79,47 @@ jobs:
           path: |
             app/build/outputs/apk/release/*.apk
             app/build/outputs/apk/debug/*.apk
+
+  reproducible:
+    name: Reproducible release APK
+    runs-on: ubuntu-latest
+    needs: android
+    env:
+      NDK_VERSION: 27.2.12479018
+    # The release APK built again from scratch, in another folder, with another JDK and another
+    # cargo home, has to come out byte for byte the same as the one from the android job.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: elsewhere/palimpsest-src
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 17
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk@4.1.2
+      - name: Install NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Build
+        working-directory: elsewhere/palimpsest-src
+        env:
+          CARGO_HOME: ${{ runner.temp }}/cargo-home
+        run: ./gradlew :app:assembleRelease --no-build-cache --console=plain
+      - uses: actions/download-artifact@v4
+        with:
+          name: apks
+          path: first
+      - name: Compare
+        run: |
+          a=first/release/app-release-unsigned.apk
+          b=elsewhere/palimpsest-src/app/build/outputs/apk/release/app-release-unsigned.apk
+          sha256sum "$a" "$b"
+          if ! cmp -s "$a" "$b"; then
+            mkdir ua ub && unzip -q "$a" -d ua && unzip -q "$b" -d ub
+            diff -rq ua ub || true
+            echo "::error::the release APK is not reproducible"
+            exit 1
+          fi
