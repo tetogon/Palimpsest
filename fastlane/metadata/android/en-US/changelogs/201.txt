@@ -1,0 +1,1 @@
+Reproducible builds: the APK can be rebuilt from source and compared byte for byte.
