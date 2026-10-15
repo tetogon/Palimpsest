@@ -128,7 +128,7 @@ private fun TrashRow(e: EntrySummary, picker: Picker) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    e.title.ifBlank { e.preview.lineSequence().firstOrNull().orEmpty() }.ifBlank { stringResource(R.string.untitled) },
+                    e.title.ifBlank { previewPlain(e.preview.lineSequence().firstOrNull().orEmpty()) }.ifBlank { stringResource(R.string.untitled) },
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

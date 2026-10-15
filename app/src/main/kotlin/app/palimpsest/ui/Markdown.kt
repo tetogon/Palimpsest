@@ -262,7 +262,8 @@ fun AnnotatedString.dimmed(terms: List<String>, dim: Color): AnnotatedString {
 /** [find] and [dim]: a link without a match fades like the text around it. */
 private class InlineColors(val link: Color, val codeBackground: Color, val find: List<String> = emptyList(), val dim: Color = link)
 
-private fun inline(text: String, colors: InlineColors, onLink: (String) -> Unit): AnnotatedString = buildAnnotatedString {
+/** [links] false: link text and bare URLs come out as plain text, nothing to tap. */
+private fun inline(text: String, colors: InlineColors, onLink: (String) -> Unit, links: Boolean = true): AnnotatedString = buildAnnotatedString {
     fun walk(s: String) {
         var at = 0
         for (m in Md.INLINE.findAll(s)) {
@@ -275,8 +276,8 @@ private fun inline(text: String, colors: InlineColors, onLink: (String) -> Unit)
                 g[4].isNotEmpty() -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { walk(g[4]) }
                 g[5].isNotEmpty() -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { walk(g[5]) }
                 g[6].isNotEmpty() -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { walk(g[6]) }
-                g[7].isNotEmpty() -> link(g[8], g[7], colors, onLink) { walk(g[7]) }
-                g[9].isNotEmpty() -> link(g[9], g[9], colors, onLink) { append(g[9]) }
+                g[7].isNotEmpty() -> if (links) link(g[8], g[7], colors, onLink) { walk(g[7]) } else walk(g[7])
+                g[9].isNotEmpty() -> if (links) link(g[9], g[9], colors, onLink) { append(g[9]) } else append(g[9])
             }
             at = m.range.last + 1
         }
@@ -285,6 +286,27 @@ private fun inline(text: String, colors: InlineColors, onLink: (String) -> Unit)
 
     walk(text)
 }
+
+/**
+ * A list preview from the core, which keeps `#` headings and inline markers: drawn bold,
+ * italic and so on like read mode, with headings in bold. Links are plain text here, so a tap
+ * opens the card.
+ */
+fun previewText(preview: String, codeBackground: Color = Color.Unspecified): AnnotatedString = buildAnnotatedString {
+    val colors = InlineColors(Color.Unspecified, codeBackground)
+    preview.lines().forEachIndexed { i, line ->
+        if (i > 0) append('\n')
+        val heading = Md.HEADING.matchEntire(line)
+        if (heading != null) {
+            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(inline(heading.groupValues[2], colors, {}, links = false)) }
+        } else {
+            append(inline(line, colors, {}, links = false))
+        }
+    }
+}
+
+/** [previewText] without the styles: for titles, labels and sorting. */
+fun previewPlain(preview: String): String = previewText(preview).text
 
 /** Links never open directly: [onLink] asks first. */
 private fun AnnotatedString.Builder.link(

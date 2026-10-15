@@ -589,7 +589,7 @@ fun EditorScreen(draft: Draft, ui: UiState, vm: AppViewModel) {
 }
 
 internal fun EntrySummary.displayTitle(context: Context) =
-    title.ifBlank { preview.lineSequence().firstOrNull().orEmpty() }.ifBlank { context.getString(R.string.untitled) }
+    title.ifBlank { previewPlain(preview.lineSequence().firstOrNull().orEmpty()) }.ifBlank { context.getString(R.string.untitled) }
 
 /** Entries that link to [entryId], at the bottom of read mode. */
 @Composable

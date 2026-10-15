@@ -475,6 +475,22 @@ fn diary_date_moves_and_survives_reopen() {
 }
 
 #[test]
+fn previews_drop_block_markers_and_keep_inline_styles() {
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    let preview = |body: &str| {
+        let id = s.save(None, EntryKind::Note, None, "".into(), body.into()).unwrap();
+        s.entries().unwrap().into_iter().find(|e| e.entry_id == id).unwrap().preview
+    };
+    // Headings and inline styles stay for the app to draw.
+    assert_eq!(preview("# Liste\n**Brot** und *Käse*"), "# Liste\n**Brot** und *Käse*");
+    assert_eq!(preview("> quote\n---\n```\ncode\n***"), "quote\ncode");
+    assert_eq!(preview("- one\n  * two\n- [ ] open\n- [x] done"), "• one\n  • two\n☐ open\n☑ done");
+    assert_eq!(preview("1. first\n*italic* line\n2 * 3 * 4"), "1. first\n*italic* line\n2 * 3 * 4");
+}
+
+#[test]
 fn note_links_point_at_live_entries_and_previews_show_link_text() {
     let f = Fixture::new();
     let c = f.open();

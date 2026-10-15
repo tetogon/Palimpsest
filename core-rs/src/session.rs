@@ -108,6 +108,45 @@ fn strip_links(line: &str) -> String {
     out
 }
 
+/// A line of the body for a list preview, or None for lines that show no text (code fences,
+/// rules). Follows the renderer in the app's Markdown.kt: quotes and list markers go, task
+/// boxes become ☐ / ☑, bullets become •. Headings and inline styles keep their markers: the
+/// app draws them as bold and italic, like read mode.
+fn preview_line(line: &str) -> Option<String> {
+    let t = line.trim();
+    if t.starts_with("```") {
+        return None;
+    }
+    let mut marks = t.chars().filter(|c| !c.is_whitespace());
+    if let Some(m @ ('-' | '*' | '_')) = marks.next() {
+        if marks.clone().count() >= 2 && marks.all(|c| c == m) {
+            return None;
+        }
+    }
+    fn after_ws(s: &str) -> Option<&str> {
+        s.strip_prefix(char::is_whitespace).map(str::trim_start)
+    }
+    if let Some(rest) = line.strip_prefix('>') {
+        let rest = rest.strip_prefix(char::is_whitespace).unwrap_or(rest);
+        return Some(strip_links(rest));
+    }
+    let body = line.trim_start();
+    let indent = &line[..line.len() - body.len()];
+    let line = match body.strip_prefix(['-', '*', '+']).and_then(after_ws) {
+        Some(item) => {
+            let task = ["[ ]", "[x]", "[X]"].iter().find_map(|b| {
+                item.strip_prefix(b).filter(|r| r.is_empty() || r.starts_with(char::is_whitespace)).map(|r| (*b == "[ ]", r.trim_start()))
+            });
+            match task {
+                Some((open, r)) => format!("{indent}{} {r}", if open { '☐' } else { '☑' }),
+                None => format!("{indent}• {item}"),
+            }
+        }
+        None => line.to_string(),
+    };
+    Some(strip_links(&line))
+}
+
 #[derive(uniffi::Record)]
 pub struct TagCount {
     pub name: String,
@@ -282,18 +321,19 @@ pub(crate) fn random_id() -> Id {
     crypto::random_bytes(16).try_into().expect("16 bytes")
 }
 
-/// First lines of the body, without photos placed in the text (`![center m](att:…)`) and
-/// without the alignment prefixes `:-: ` and `--: `.
+/// First lines of the body for lists: without photos placed in the text (`![center m](att:…)`),
+/// the alignment prefixes `:-: ` and `--: `, and the block markers [preview_line] removes.
 fn preview(body: &str) -> String {
-    let lines: Vec<&str> = body
+    let lines: Vec<String> = body
         .lines()
         .map(str::trim_end)
         .filter(|l| !(l.starts_with("![") && l.contains("](att:") && l.ends_with(')')))
         .map(|l| l.strip_prefix(":-: ").or_else(|| l.strip_prefix("--: ")).unwrap_or(l))
+        .filter_map(preview_line)
         .filter(|l| !l.trim().is_empty())
         .take(4)
         .collect();
-    lines.iter().map(|l| strip_links(l)).collect::<Vec<_>>().join("\n").chars().take(240).collect()
+    lines.join("\n").chars().take(240).collect()
 }
 
 impl Inner {

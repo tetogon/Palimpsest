@@ -605,7 +605,7 @@ private fun NoteCard(e: EntrySummary, picker: Picker, loadThumb: suspend (String
                 if (e.preview.isNotBlank()) {
                     if (e.title.isNotBlank()) Spacer(Modifier.height(6.dp))
                     Text(
-                        e.preview,
+                        previewText(e.preview, MaterialTheme.colorScheme.surfaceContainerHighest),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 10,
@@ -701,13 +701,13 @@ internal fun DiaryRow(e: EntrySummary, picker: Picker) {
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                val title = e.title.ifBlank { e.preview.lineSequence().firstOrNull().orEmpty() }
+                val title = e.title.ifBlank { previewPlain(e.preview.lineSequence().firstOrNull().orEmpty()) }
                     .ifBlank { stringResource(R.string.untitled) }
                 Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 val rest = if (e.title.isBlank()) e.preview.lineSequence().drop(1).joinToString("\n") else e.preview
                 if (rest.isNotBlank()) {
                     Text(
-                        rest,
+                        previewText(rest, MaterialTheme.colorScheme.surfaceContainerHighest),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 3,
@@ -803,7 +803,7 @@ private fun TodoRow(e: EntrySummary, picker: Picker, onSetDone: (String, Boolean
                 )
                 if (e.preview.isNotBlank()) {
                     Text(
-                        e.preview.lineSequence().first(),
+                        previewText(e.preview.lineSequence().first(), MaterialTheme.colorScheme.surfaceContainerHighest),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

@@ -124,7 +124,7 @@ fun UiState.visible(): List<EntrySummary> {
     val order = when (appSettings.sort) {
         AppSettings.SortOrder.UPDATED -> compareByDescending<EntrySummary> { it.updatedMs }
         AppSettings.SortOrder.CREATED -> compareByDescending { it.createdMs }
-        AppSettings.SortOrder.TITLE -> compareBy { it.title.ifBlank { it.preview }.lowercase() }
+        AppSettings.SortOrder.TITLE -> compareBy { it.title.ifBlank { previewPlain(it.preview) }.lowercase() }
     }
     return list.sortedWith(compareByDescending<EntrySummary> { it.pinned }.then(order))
 }
@@ -246,7 +246,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             val from = session.entry(fromId) ?: return@quiet
             val to = _ui.value.allEntries.firstOrNull { it.entryId == toId } ?: return@quiet
-            val label = to.title.ifBlank { to.preview.lineSequence().firstOrNull().orEmpty() }
+            val label = to.title.ifBlank { previewPlain(to.preview.lineSequence().firstOrNull().orEmpty()) }
                 .replace(Regex("""[\[\]\n]"""), " ").trim().ifEmpty { "…" }
             val body = from.body.trimEnd().let { if (it.isEmpty()) "" else "$it\n\n" } + "[$label](note:$toId)"
             session.save(fromId, from.kind, from.folderId, from.title, body)

@@ -37,6 +37,16 @@ class MdTest {
     }
 
     @Test
+    fun previewsDrawStylesWithoutMarkers() {
+        val text = previewText("# Liste\n**Brot** und *Käse*, `code`, [link](https://x.y)")
+        assertEquals("Liste\nBrot und Käse, code, link", text.text)
+        val bold = text.spanStyles.filter { it.item.fontWeight == androidx.compose.ui.text.font.FontWeight.Bold }
+        assertEquals(listOf("Liste", "Brot"), bold.map { text.text.substring(it.start, it.end) })
+        assertTrue(text.getLinkAnnotations(0, text.length).isEmpty())
+        assertEquals("Liste", previewPlain("# Liste"))
+    }
+
+    @Test
     fun emptyTaskAndBoldAreNotBullets() {
         assertEquals(listOf(MdBlock.Task(0, false, "", 0)), Md.parse("- [ ]"))
         assertTrue(Md.parse("**bold** start").single() is MdBlock.Paragraph)

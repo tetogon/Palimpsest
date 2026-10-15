@@ -1,0 +1,1 @@
+Note cards show bold, italic and headings as styled text instead of Markdown markers.
