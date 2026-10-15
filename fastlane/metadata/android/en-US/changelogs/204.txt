@@ -1,0 +1,1 @@
+Two unused permissions that a library added (network state, foreground service) are removed.
