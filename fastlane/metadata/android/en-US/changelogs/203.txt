@@ -1,0 +1,1 @@
+Smaller APK: the release build is now minified with R8.

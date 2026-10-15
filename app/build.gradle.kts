@@ -91,8 +91,8 @@ android {
         targetSdk = 34
         // Written out, not computed: F-Droid reads them from this file. A release bumps both
         // (1.2.3 -> 10203) and is tagged v<versionName>; release.yml checks that they match.
-        versionCode = 202
-        versionName = "0.2.2"
+        versionCode = 203
+        versionName = "0.2.3"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
@@ -122,8 +122,9 @@ android {
 
     buildTypes {
         release {
-            // JNA needs keep rules before minification can be turned on.
-            isMinifyEnabled = false
+            // R8; the keep rules for JNA, the UniFFI bindings and zxcvbn are in proguard-rules.pro.
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
         }
     }
@@ -143,11 +144,6 @@ android {
     }
     buildFeatures {
         compose = true
-    }
-    // F-Droid: no Google-signed dependency metadata blob in the APK.
-    dependenciesInfo {
-        includeInApk = false
-        includeInBundle = false
     }
 }
 
