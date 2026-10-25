@@ -1,0 +1,2 @@
+Formulas: $…$ inside a line and $$…$$ on their own are drawn in read mode (LaTeX), with a ∑ button in the formatting bar.
+An attachment's height is no longer lost when a vault is imported.
