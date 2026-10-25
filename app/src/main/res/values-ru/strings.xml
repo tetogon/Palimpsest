@@ -67,6 +67,7 @@
     <string name="md_bold">Жирный</string>
     <string name="md_italic">Курсив</string>
     <string name="md_strike">Зачёркнутый</string>
+    <string name="md_formula">Формула</string>
     <string name="md_bullets">Маркированный список</string>
     <string name="md_numbers">Нумерованный список</string>
     <string name="md_tasks">Чек-лист</string>

@@ -9,3 +9,8 @@
 
 # zxcvbn reads its dictionaries and messages from resources next to its classes.
 -keep class com.nulabinc.zxcvbn.** { *; }
+
+# JLaTeXMath calls its macros by method name and loads fonts and symbol tables by name.
+-keep class org.scilab.forge.jlatexmath.** { *; }
+-keep class ru.noties.jlatexmath.** { *; }
+-dontwarn org.scilab.forge.jlatexmath.**

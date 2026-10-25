@@ -154,6 +154,10 @@ private object Highlighter {
                     }
                 }
                 g[9] != null -> span(e, MdColor(c.accent), r.first, r.last + 1)
+                g[10] != null -> {
+                    span(e, MdMono(), r.first, r.last + 1)
+                    span(e, MdColor(c.accent), r.first, r.last + 1)
+                }
             }
         }
         // Search: everything but the matches fades. Added last, so it wins over other colours.
@@ -748,6 +752,7 @@ fun FormatBar(
                     IconTool(CheckBoxIcon, R.string.md_tasks) { controller.list(MdController.ListKind.TASK) }
                     IconTool(QuoteIcon, R.string.md_quote) { controller.list(MdController.ListKind.QUOTE) }
                     IconTool(CodeIcon, R.string.md_code) { controller.wrap("`") }
+                    TextTool("∑", stringResource(R.string.md_formula), FontWeight.Normal) { controller.wrap("$") }
                     IconTool(NoteLinkIcon, R.string.note_link, onNoteLink)
                     IconTool(LinkIcon, R.string.md_link) { controller.link() }
                 }

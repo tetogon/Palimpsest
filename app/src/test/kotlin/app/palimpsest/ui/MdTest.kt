@@ -68,6 +68,35 @@ class MdTest {
     }
 
     @Test
+    fun inlineFormulas() {
+        fun formulas(s: String) = Md.INLINE.findAll(s).mapNotNull { it.groups[10]?.value }.toList()
+        assertEquals(listOf("x^2", "a_1 + b_2"), formulas("so \$x^2\$ and \$a_1 + b_2\$."))
+        // Prices and lone dollars stay text.
+        assertEquals(emptyList<String>(), formulas("from \$5 to \$10, US\$3, \$ x\$, \$x \$, \\\$y\$"))
+        // Inside code nothing is a formula; in bold it still is.
+        assertEquals(emptyList<String>(), formulas("`\$x\$`"))
+        assertEquals("x", Md.INLINE.find("**\$x\$**")!!.groups[2]!!.value.let { formulas(it).single() })
+    }
+
+    @Test
+    fun displayFormulas() {
+        val blocks = Md.parse("before\n\$\$E = mc^2\$\$\n\$\$\n\\frac{a}{b}\n\\sum x\n\$\$\nafter\n\$\$\nunclosed")
+        assertEquals(MdBlock.Paragraph("before"), blocks[0])
+        assertEquals(MdBlock.Math("E = mc^2"), blocks[1])
+        assertEquals(MdBlock.Math("\\frac{a}{b}\n\\sum x"), blocks[2])
+        assertEquals(MdBlock.Paragraph("after\n\$\$\nunclosed"), blocks[3])
+        assertEquals(4, blocks.size)
+    }
+
+    @Test
+    fun previewsShowFormulasAsTex() {
+        assertEquals("sum x^2\nE=mc^2\nnext", previewPlain("sum \$x^2\$\n\$\$\nE=mc^2\n\$\$\nnext"))
+        // A block the preview cut off loses its opening `$$` and stays text.
+        assertEquals("a\n\\frac{1}{2}", previewPlain("a\n\$\$\n\\frac{1}{2}"))
+        assertEquals(listOf("x^2", "E=mc^2", "y"), previewFormulas("sum \$x^2\$\n\$\$E=mc^2\$\$\n\$y\$"))
+    }
+
+    @Test
     fun embedsAndAlignment() {
         val id = "0123456789abcdef0123456789abcdef"
         val body = listOf(

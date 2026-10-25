@@ -155,6 +155,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.work.runtime)
     implementation(libs.zxcvbn)
+    // Formulas in read mode, drawn natively (no WebView); Cyrillic for \text{…}.
+    implementation(libs.jlatexmath)
+    implementation(libs.jlatexmath.cyrillic)
 
     testImplementation(libs.junit)
 

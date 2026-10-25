@@ -604,13 +604,7 @@ private fun NoteCard(e: EntrySummary, picker: Picker, loadThumb: suspend (String
                 }
                 if (e.preview.isNotBlank()) {
                     if (e.title.isNotBlank()) Spacer(Modifier.height(6.dp))
-                    Text(
-                        previewText(e.preview, MaterialTheme.colorScheme.surfaceContainerHighest),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 10,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    PreviewText(e.preview, MaterialTheme.typography.bodyMedium, MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 10)
                 }
                 if (e.title.isBlank() && e.preview.isBlank()) {
                     Text(stringResource(R.string.untitled), color = MaterialTheme.colorScheme.outline)
@@ -706,13 +700,7 @@ internal fun DiaryRow(e: EntrySummary, picker: Picker) {
                 Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 val rest = if (e.title.isBlank()) e.preview.lineSequence().drop(1).joinToString("\n") else e.preview
                 if (rest.isNotBlank()) {
-                    Text(
-                        previewText(rest, MaterialTheme.colorScheme.surfaceContainerHighest),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    PreviewText(rest, MaterialTheme.typography.bodyMedium, MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3)
                 }
             }
             if (picked) PickedBadge()
@@ -802,13 +790,7 @@ private fun TodoRow(e: EntrySummary, picker: Picker, onSetDone: (String, Boolean
                     overflow = TextOverflow.Ellipsis,
                 )
                 if (e.preview.isNotBlank()) {
-                    Text(
-                        previewText(e.preview.lineSequence().first(), MaterialTheme.colorScheme.surfaceContainerHighest),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    PreviewText(e.preview.lineSequence().first(), MaterialTheme.typography.bodySmall, MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                 }
             }
             if (picked) PickedBadge(Modifier.padding(end = 8.dp))

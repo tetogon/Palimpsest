@@ -68,6 +68,7 @@
     <string name="md_bold">Bold</string>
     <string name="md_italic">Italic</string>
     <string name="md_strike">Strikethrough</string>
+    <string name="md_formula">Formula</string>
     <string name="md_bullets">Bulleted list</string>
     <string name="md_numbers">Numbered list</string>
     <string name="md_tasks">Checklist</string>

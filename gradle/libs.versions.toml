@@ -10,6 +10,7 @@ junit = "4.13.2"
 jna = "5.14.0"
 lazysodiumJava = "5.1.4"
 zxcvbn = "1.9.0"
+jlatexmath = "0.2.0"
 
 [libraries]
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
@@ -26,6 +27,8 @@ androidx-compose-material-icons = { group = "androidx.compose.material", name = 
 androidx-work-runtime = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 zxcvbn = { group = "com.nulab-inc", name = "zxcvbn", version.ref = "zxcvbn" }
+jlatexmath = { group = "ru.noties", name = "jlatexmath-android", version.ref = "jlatexmath" }
+jlatexmath-cyrillic = { group = "ru.noties", name = "jlatexmath-android-font-cyrillic", version.ref = "jlatexmath" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

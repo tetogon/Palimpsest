@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -26,6 +28,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -59,6 +63,8 @@ sealed interface MdBlock {
     data class Task(val indent: Int, val checked: Boolean, val text: String, val line: Int) : MdBlock
     data class Quote(val text: String) : MdBlock
     data class Code(val text: String) : MdBlock
+    /** A formula on its own: `$$…$$` on one line, or between two lines of `$$`. */
+    data class Math(val tex: String) : MdBlock
     data object Rule : MdBlock
 }
 
@@ -104,7 +110,11 @@ object Md {
     private val RULE = Regex("""^\s*([-*_])(\s*\1){2,}\s*$""")
     private val FENCE = Regex("""^\s*```""")
 
-    /** Inline tokens, earliest match wins: code, bold, strike, italic, link, bare URL. */
+    /**
+     * Inline tokens, earliest match wins: code, bold, strike, italic, link, bare URL, formula.
+     * A formula `$…$` follows pandoc: no space inside either dollar and no digit right after the
+     * closing one, so "$5 and $10" stays text.
+     */
     val INLINE = Regex(
         """`([^`\n]+)`""" +
             """|\*\*(.+?)\*\*""" +
@@ -113,8 +123,11 @@ object Md {
             """|\*(?![\s*])(.+?)(?<![\s*])\*""" +
             """|(?<![\p{L}\p{N}_])_(?![\s_])(.+?)(?<![\s_])_(?![\p{L}\p{N}_])""" +
             """|\[([^\]\n]+)]\(([^)\s]+)\)""" +
-            """|(https?://[^\s<>()]+[^\s<>().,;:!?'"])""",
+            """|(https?://[^\s<>()]+[^\s<>().,;:!?'"])""" +
+            """|(?<![\\$\p{L}\p{N}])\$(?![\s$])([^$\n]+?)(?<![\s\\])\$(?![\p{N}$])""",
     )
+    val DISPLAY_MATH = Regex("""^\s*\$\$(.+)\$\$\s*$""")
+    val MATH_FENCE = Regex("""^\s*\$\$\s*$""")
 
     fun parse(body: String): List<MdBlock> {
         val lines = body.split('\n')
@@ -141,6 +154,22 @@ object Md {
                 out += MdBlock.Code(code.toString())
                 i++
                 continue
+            }
+            val display = DISPLAY_MATH.matchEntire(line)
+            if (display != null) {
+                flush()
+                out += MdBlock.Math(display.groupValues[1].trim())
+                i++
+                continue
+            }
+            if (MATH_FENCE.matches(line)) {
+                val close = (i + 1 until lines.size).firstOrNull { MATH_FENCE.matches(lines[it]) }
+                if (close != null) {
+                    flush()
+                    out += MdBlock.Math(lines.subList(i + 1, close).joinToString("\n").trim())
+                    i = close + 1
+                    continue
+                }
             }
             val embed = parseEmbed(line)
             if (embed != null) {
@@ -262,15 +291,26 @@ fun AnnotatedString.dimmed(terms: List<String>, dim: Color): AnnotatedString {
 /** [find] and [dim]: a link without a match fades like the text around it. */
 private class InlineColors(val link: Color, val codeBackground: Color, val find: List<String> = emptyList(), val dim: Color = link)
 
-/** [links] false: link text and bare URLs come out as plain text, nothing to tap. */
-private fun inline(text: String, colors: InlineColors, onLink: (String) -> Unit, links: Boolean = true): AnnotatedString = buildAnnotatedString {
+/**
+ * [links] false: link text and bare URLs come out as plain text, nothing to tap. With [math], a
+ * formula that draws becomes inline content (see [MathRenderer.inlineContent]); otherwise it
+ * shows as monospace TeX.
+ */
+private fun inline(
+    text: String,
+    colors: InlineColors,
+    onLink: (String) -> Unit,
+    links: Boolean = true,
+    math: MathRenderer? = null,
+): AnnotatedString = buildAnnotatedString {
+    val mono = SpanStyle(fontFamily = FontFamily.Monospace, background = colors.codeBackground, fontSize = 0.9.em)
     fun walk(s: String) {
         var at = 0
         for (m in Md.INLINE.findAll(s)) {
             append(s.substring(at, m.range.first))
             val g = m.groupValues
             when {
-                g[1].isNotEmpty() -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = colors.codeBackground, fontSize = 0.9.em)) { append(g[1]) }
+                g[1].isNotEmpty() -> withStyle(mono) { append(g[1]) }
                 g[2].isNotEmpty() -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { walk(g[2]) }
                 g[3].isNotEmpty() -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { walk(g[3]) }
                 g[4].isNotEmpty() -> withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { walk(g[4]) }
@@ -278,6 +318,9 @@ private fun inline(text: String, colors: InlineColors, onLink: (String) -> Unit,
                 g[6].isNotEmpty() -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { walk(g[6]) }
                 g[7].isNotEmpty() -> if (links) link(g[8], g[7], colors, onLink) { walk(g[7]) } else walk(g[7])
                 g[9].isNotEmpty() -> if (links) link(g[9], g[9], colors, onLink) { append(g[9]) } else append(g[9])
+                g[10].isNotEmpty() ->
+                    if (math?.render(g[10], display = false) != null) appendInlineContent(MathRenderer.inlineId(g[10]), g[10])
+                    else withStyle(mono) { append(g[10]) }
             }
             at = m.range.last + 1
         }
@@ -288,19 +331,55 @@ private fun inline(text: String, colors: InlineColors, onLink: (String) -> Unit,
 }
 
 /**
+ * Lines of a preview, a `$$` block folded into one line, with whether that line is such a
+ * block formula. A `$$` the preview cut off before its closing one is dropped.
+ */
+private fun previewLines(preview: String): List<Pair<String, Boolean>> {
+    val lines = preview.lines()
+    val out = mutableListOf<Pair<String, Boolean>>()
+    var i = 0
+    while (i < lines.size) {
+        val line = lines[i]
+        val display = Md.DISPLAY_MATH.matchEntire(line)
+        if (display != null) {
+            out += display.groupValues[1].trim() to true
+        } else if (Md.MATH_FENCE.matches(line)) {
+            val close = (i + 1 until lines.size).firstOrNull { Md.MATH_FENCE.matches(lines[it]) }
+            if (close != null) {
+                out += lines.subList(i + 1, close).joinToString(" ").trim() to true
+                i = close
+            }
+        } else {
+            out += line to false
+        }
+        i++
+    }
+    return out
+}
+
+/** Every formula of a preview, inline and block, for [MathRenderer.inlineContent]. */
+fun previewFormulas(preview: String): List<String> = previewLines(preview).flatMap { (line, display) ->
+    if (display) listOf(line) else Md.INLINE.findAll(line).mapNotNull { it.groups[10]?.value }.toList()
+}
+
+/**
  * A list preview from the core, which keeps `#` headings and inline markers: drawn bold,
  * italic and so on like read mode, with headings in bold. Links are plain text here, so a tap
- * opens the card.
+ * opens the card. With [math], formulas are drawn too, a block one at the height of a line;
+ * without it they stay TeX in monospace.
  */
-fun previewText(preview: String, codeBackground: Color = Color.Unspecified): AnnotatedString = buildAnnotatedString {
+fun previewText(preview: String, codeBackground: Color = Color.Unspecified, math: MathRenderer? = null): AnnotatedString = buildAnnotatedString {
     val colors = InlineColors(Color.Unspecified, codeBackground)
-    preview.lines().forEachIndexed { i, line ->
+    previewLines(preview).forEachIndexed { i, (line, display) ->
         if (i > 0) append('\n')
         val heading = Md.HEADING.matchEntire(line)
-        if (heading != null) {
-            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(inline(heading.groupValues[2], colors, {}, links = false)) }
+        if (display) {
+            if (math?.render(line, display = false) != null) appendInlineContent(MathRenderer.inlineId(line), line)
+            else withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground, fontSize = 0.9.em)) { append(line) }
+        } else if (heading != null) {
+            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(inline(heading.groupValues[2], colors, {}, links = false, math = math)) }
         } else {
-            append(inline(line, colors, {}, links = false))
+            append(inline(line, colors, {}, links = false, math = math))
         }
     }
 }
@@ -344,11 +423,15 @@ fun MarkdownText(
     val colors = remember(scheme.primary, scheme.surfaceContainerHighest, find, dim) {
         InlineColors(scheme.primary, scheme.surfaceContainerHighest, find, dim)
     }
-    fun inl(t: String) = inline(t, colors, onLink).dimmed(find, dim)
+    val textPx = with(LocalDensity.current) { body1.fontSize.toPx() }
+    val math = remember(textPx, scheme.onSurface) { MathRenderer(textPx, scheme.onSurface.toArgb()) }
+    fun inl(t: String) = inline(t, colors, onLink, math = math).dimmed(find, dim)
+    fun tex(t: String) = math.inlineContent(t)
 
     @Composable
     fun heading(block: MdBlock.Heading, m: Modifier = Modifier) = FindText(
         inl(block.text), find,
+        inlineContent = tex(block.text),
         style = when (block.level) {
             1 -> MaterialTheme.typography.headlineMedium
             2 -> MaterialTheme.typography.headlineSmall
@@ -360,7 +443,7 @@ fun MarkdownText(
 
     @Composable
     fun paragraph(block: MdBlock.Paragraph, m: Modifier = Modifier) =
-        FindText(inl(block.text), find, style = body1, textAlign = block.align.textAlign(), modifier = m)
+        FindText(inl(block.text), find, style = body1, textAlign = block.align.textAlign(), modifier = m, inlineContent = tex(block.text))
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         for (block in blocks) {
@@ -368,8 +451,8 @@ fun MarkdownText(
                 is MdBlock.Embed -> Unit // photos are blocks of their own (see Doc)
                 is MdBlock.Heading -> heading(block, Modifier.fillMaxWidth())
                 is MdBlock.Paragraph -> paragraph(block, Modifier.fillMaxWidth())
-                is MdBlock.Bullet -> ListRow(block.indent, "•", inl(block.text), body1, find)
-                is MdBlock.Numbered -> ListRow(block.indent, "${block.number}.", inl(block.text), body1, find)
+                is MdBlock.Bullet -> ListRow(block.indent, "•", inl(block.text), body1, find, tex(block.text))
+                is MdBlock.Numbered -> ListRow(block.indent, "${block.number}.", inl(block.text), body1, find, tex(block.text))
                 is MdBlock.Task -> Row(Modifier.padding(start = (block.indent * 20).dp), verticalAlignment = Alignment.Top) {
                     Checkbox(checked = block.checked, onCheckedChange = { onToggleTask(block.line) }, modifier = Modifier.size(36.dp))
                     Spacer(Modifier.width(6.dp))
@@ -380,12 +463,30 @@ fun MarkdownText(
                             textDecoration = if (block.checked) TextDecoration.LineThrough else null,
                         ),
                         modifier = Modifier.padding(top = 4.dp),
+                        inlineContent = tex(block.text),
                     )
                 }
                 is MdBlock.Quote -> Row(Modifier.height(IntrinsicSize.Min)) {
                     Box(Modifier.width(3.dp).fillMaxHeight().background(scheme.primary, RoundedCornerShape(2.dp)))
                     Spacer(Modifier.width(12.dp))
-                    FindText(inl(block.text), find, style = body1.copy(fontStyle = FontStyle.Italic, color = scheme.onSurfaceVariant))
+                    FindText(
+                        inl(block.text), find,
+                        style = body1.copy(fontStyle = FontStyle.Italic, color = scheme.onSurfaceVariant),
+                        inlineContent = tex(block.text),
+                    )
+                }
+                is MdBlock.Math -> {
+                    val d = math.render(block.tex, display = true)
+                    if (d != null) {
+                        MathBlock(d, Modifier.padding(vertical = 4.dp))
+                    } else {
+                        FindText(
+                            AnnotatedString(block.tex).dimmed(find, dim), find,
+                            style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 14.sp, color = scheme.error),
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                 }
                 is MdBlock.Code -> Surface(
                     shape = RoundedCornerShape(12.dp),
@@ -412,10 +513,17 @@ private fun MdAlign.textAlign() = when (this) {
 }
 
 @Composable
-private fun ListRow(indent: Int, marker: String, text: AnnotatedString, style: TextStyle, find: List<String>) {
+private fun ListRow(
+    indent: Int,
+    marker: String,
+    text: AnnotatedString,
+    style: TextStyle,
+    find: List<String>,
+    inlineContent: Map<String, InlineTextContent>,
+) {
     Row(Modifier.padding(start = (indent * 20).dp)) {
         Text(marker, style = style.copy(color = MaterialTheme.colorScheme.primary), modifier = Modifier.width(28.dp))
-        FindText(text, find, style = style)
+        FindText(text, find, style = style, inlineContent = inlineContent)
     }
 }
 
@@ -428,8 +536,12 @@ internal fun FindText(
     modifier: Modifier = Modifier,
     textAlign: TextAlign? = null,
     softWrap: Boolean = true,
+    inlineContent: Map<String, InlineTextContent> = emptyMap(),
 ) {
     val ranges = remember(text, find) { Md.findRanges(text.text, find) }
     val (place, onLayout) = findSource(text.text, ranges)
-    Text(text, style = style, textAlign = textAlign, softWrap = softWrap, modifier = modifier.then(place), onTextLayout = onLayout)
+    Text(
+        text, style = style, textAlign = textAlign, softWrap = softWrap, modifier = modifier.then(place),
+        onTextLayout = onLayout, inlineContent = inlineContent,
+    )
 }
