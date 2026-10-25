@@ -68,7 +68,9 @@ jobs:
       - name: Run
         run: |
           mkdir -p "fuzz/corpus/${{ matrix.target }}" "fuzz/seeds/${{ matrix.target }}"
-          cargo +nightly fuzz run ${{ matrix.target }} \
+          # The prebuilt cargo-fuzz is a musl binary and would default to musl, where ASan
+          # does not work: build for the runner's own glibc target.
+          cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} \
             "fuzz/corpus/${{ matrix.target }}" "fuzz/seeds/${{ matrix.target }}" -- \
             -max_total_time="$SECONDS_PER_TARGET" -max_len=65536 -timeout=10 -rss_limit_mb=2048
       - name: Crash input
