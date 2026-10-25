@@ -4,6 +4,7 @@ An encrypted diary and notes app for Android with **deniable vaults**: one passw
 any number of vaults, and no way to tell from the file how many there are.
 
 [![CI](https://github.com/tetogon/palimpsest/actions/workflows/ci.yml/badge.svg)](https://github.com/tetogon/palimpsest/actions/workflows/ci.yml)
+[![Fuzz](https://github.com/tetogon/palimpsest/actions/workflows/fuzz.yml/badge.svg)](https://github.com/tetogon/palimpsest/actions/workflows/fuzz.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
 ![Palimpsest: notes, diary and to-dos, encrypted, with another layer underneath](docs/screenshots/banner.jpg)
@@ -104,6 +105,13 @@ Tests:
 ```sh
 (cd core-rs && cargo test)
 ./gradlew :app:testReleaseUnitTest
+```
+
+The core's parsers and whole crafted vaults are fuzzed with libFuzzer (Linux or macOS,
+nightly Rust; see [threat model, G6](docs/threat-model.md#g6-crafted-vaults-do-not-crash-the-app)):
+
+```sh
+cd core-rs && cargo +nightly fuzz run vault
 ```
 
 On Windows, [`scripts/env.ps1`](scripts/env.ps1) sets up portable toolchains and works around

@@ -87,6 +87,24 @@ changing a password, a wrong current password, "not found" in the destroy rule a
 Otherwise creating a vault would be the same oracle as unlocking, only without the pause.
 Against a copy of the file the pause does not help: there only Argon2id counts.
 
+### G6. Crafted vaults do not crash the app
+
+Encryption keeps strangers from writing readable blocks, but not everyone who writes them is
+a stranger. An exported vault arrives with its password, so whoever made the file chose every
+decrypted byte the import will parse; anyone who knows a decoy password can put such blocks
+into the decoy. A parser that panics or allocates without bound on them would lock the owner
+out of their own diary.
+
+So the decoders (TLV, operations, frames, attachment references) are total: anything
+malformed is treated as foreign, never as an error that stops the unlock. This is checked by
+fuzzing ([`core-rs/fuzz`](../core-rs/fuzz), harness in
+[`src/fuzzing.rs`](../core-rs/src/fuzzing.rs)): libFuzzer feeds each decoder arbitrary bytes
+and checks that whatever decodes writes back the same way, and one target seals fuzzed
+plaintexts into real blocks of a vault, loads it, reads every entry and attachment and imports
+it into another vault. It runs a minute per target on every push and 25 minutes a day in CI.
+The key derivation is skipped there: the target starts from the vault key, since Argon2id
+would leave only a few runs per second.
+
 ## 5. Residual risks
 
 | # | Risk | Who it concerns | What we do |
