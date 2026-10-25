@@ -42,8 +42,11 @@ impl AttachmentRef {
         if self.duration_ms > 0 {
             w.put_u64(A_DURATION, self.duration_ms);
         }
+        // Each on its own: a reference read with only one of them writes back the same.
         if self.width > 0 {
             w.put_u32(A_WIDTH, self.width);
+        }
+        if self.height > 0 {
             w.put_u32(A_HEIGHT, self.height);
         }
         w.into_bytes()
@@ -123,5 +126,12 @@ mod tests {
         };
         assert_eq!(AttachmentRef::decode(&r.encode()), Some(r));
         assert!(AttachmentRef::decode(&[1, 2, 3]).is_none());
+    }
+
+    /// Found by fuzzing: a height without a width was dropped when the reference was rewritten.
+    #[test]
+    fn height_without_width_survives_a_rewrite() {
+        let r = AttachmentRef { seed: [8; 16], parts: 1, size: 5, mime: "image/jpeg".into(), thumb: None, duration_ms: 0, width: 0, height: 2 };
+        assert_eq!(AttachmentRef::decode(&r.encode()), Some(r));
     }
 }
