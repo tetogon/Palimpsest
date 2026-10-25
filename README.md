@@ -40,6 +40,8 @@ anyone holding the file:
   and to-dos. Swipe between them.
 - Markdown editor with live styling. Markers like `**` and `#` hide except on the line
   you are editing. Formatting bar, alignment, and one undo history for the whole entry.
+- LaTeX formulas, `$…$` in a line and `$$…$$` on their own, drawn natively in read mode
+  and on the cards.
 - Photos and voice notes. The in-app camera and recorder work in memory only, so nothing
   reaches the gallery. Photos are cropped and rotated before they are stored, and EXIF
   (including GPS) is dropped. Drag a photo into the text and place it left, centre or right

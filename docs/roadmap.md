@@ -38,6 +38,7 @@ Ground rules:
 - [x] Markdown markers hidden away from the cursor's line, paragraph alignment
 - [x] Photos in the text: left / centre / right, three sizes, text beside them
 - [x] One undo history for the whole entry, layout changes included
+- [x] LaTeX formulas (`$…$`, `$$…$$`) drawn natively in read mode and on the cards
 
 ## Stage 5. Attachments
 - [x] BLOB objects (§6.4), thumbnails, a size limit
