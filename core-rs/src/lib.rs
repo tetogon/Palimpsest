@@ -9,6 +9,8 @@ mod container;
 pub mod crypto;
 pub mod format;
 pub mod frame;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 pub mod heap;
 pub mod keys;
 pub mod op;

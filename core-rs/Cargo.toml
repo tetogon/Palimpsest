@@ -24,6 +24,10 @@ unicode-normalization = "0.1"
 uniffi = { version = "0.28", features = ["cli"] }
 zeroize = "1"
 
+[features]
+# Entry points for cargo-fuzz (core-rs/fuzz); never in the app.
+fuzzing = []
+
 [dev-dependencies]
 flate2 = "1"
 hex = "0.4"

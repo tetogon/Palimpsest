@@ -1,0 +1,54 @@
+# cargo-fuzz targets for the core (see src/fuzzing.rs). Needs nightly Rust:
+#   cargo +nightly fuzz run vault
+# Not part of the app build: its own workspace, outside the Gradle and F-Droid builds.
+
+[package]
+name = "palimpsest-core-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+palimpsest-core = { path = "..", features = ["fuzzing"] }
+
+[workspace]
+members = ["."]
+[[bin]]
+name = "tlv"
+path = "fuzz_targets/tlv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "op"
+path = "fuzz_targets/op.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "attachment"
+path = "fuzz_targets/attachment.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vault"
+path = "fuzz_targets/vault.rs"
+test = false
+doc = false
+bench = false

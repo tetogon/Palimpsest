@@ -1,0 +1,79 @@
+name: Fuzz
+
+# libFuzzer on the core's parsers and on whole vaults built from fuzzed plaintexts
+# (core-rs/src/fuzzing.rs). A minute per target on every push to main, 25 minutes once a day.
+# The corpus is kept in the Actions cache and grows from run to run; a crash leaves its input
+# as an artifact, to be turned into a regular test.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    name: Fuzz harness on stable
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core-rs
+      - run: cargo test --locked --features fuzzing --lib fuzzing
+      - name: Seeds
+        run: FUZZ_SEED_DIR="$PWD/fuzz/seeds" cargo test --locked --features fuzzing --lib write_fuzz_seeds -- --ignored
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-seeds
+          path: core-rs/fuzz/seeds
+
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    needs: harness
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [tlv, op, frame, attachment, vault]
+    defaults:
+      run:
+        working-directory: core-rs
+    env:
+      SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && 1500 || 60 }}
+      # Every run writes two small container files; keep them in memory.
+      TMPDIR: /dev/shm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      - uses: actions/download-artifact@v4
+        with:
+          name: fuzz-seeds
+          path: core-rs/fuzz/seeds
+      - uses: actions/cache@v4
+        with:
+          path: core-rs/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Run
+        run: |
+          mkdir -p "fuzz/corpus/${{ matrix.target }}" "fuzz/seeds/${{ matrix.target }}"
+          cargo +nightly fuzz run ${{ matrix.target }} \
+            "fuzz/corpus/${{ matrix.target }}" "fuzz/seeds/${{ matrix.target }}" -- \
+            -max_total_time="$SECONDS_PER_TARGET" -max_len=65536 -timeout=10 -rss_limit_mb=2048
+      - name: Crash input
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: core-rs/fuzz/artifacts/${{ matrix.target }}
