@@ -488,6 +488,7 @@ fn previews_drop_block_markers_and_keep_inline_styles() {
     assert_eq!(preview("> quote\n---\n```\ncode\n***"), "quote\ncode");
     assert_eq!(preview("- one\n  * two\n- [ ] open\n- [x] done"), "• one\n  • two\n☐ open\n☑ done");
     assert_eq!(preview("1. first\n*italic* line\n2 * 3 * 4"), "1. first\n*italic* line\n2 * 3 * 4");
+    assert_eq!(preview("| a | **b** |\n|---|:-:|\n| 1 |  |\nx | y"), "a · **b**\n1 · \nx | y");
 }
 
 #[test]

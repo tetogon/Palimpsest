@@ -117,6 +117,14 @@ fn preview_line(line: &str) -> Option<String> {
     if t.starts_with("```") {
         return None;
     }
+    // A table row `| a | b |` becomes `a · b`; the `|---|:-:|` line under the header goes.
+    if t.len() >= 2 && t.starts_with('|') && t.ends_with('|') {
+        if t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ' | '\t')) {
+            return None;
+        }
+        let cells: Vec<&str> = t[1..t.len() - 1].split('|').map(str::trim).collect();
+        return Some(strip_links(&cells.join(" · ")));
+    }
     let mut marks = t.chars().filter(|c| !c.is_whitespace());
     if let Some(m @ ('-' | '*' | '_')) = marks.next() {
         if marks.clone().count() >= 2 && marks.all(|c| c == m) {

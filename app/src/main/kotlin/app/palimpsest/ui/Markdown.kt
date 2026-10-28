@@ -1,6 +1,7 @@
 package app.palimpsest.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,8 +28,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -43,6 +46,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -62,7 +66,10 @@ sealed interface MdBlock {
     /** [line] is the index of the source line, for ticking it in place. */
     data class Task(val indent: Int, val checked: Boolean, val text: String, val line: Int) : MdBlock
     data class Quote(val text: String) : MdBlock
-    data class Code(val text: String) : MdBlock
+    /** [lang] is the fence's info string (```kotlin), lower case; empty when there is none. */
+    data class Code(val text: String, val lang: String = "") : MdBlock
+    /** A GitHub table: a header row, a `|---|:-:|` row, then body rows, all with the header's width. */
+    data class Table(val header: List<String>, val align: List<MdAlign>, val rows: List<List<String>>) : MdBlock
     /** A formula on its own: `$$…$$` on one line, or between two lines of `$$`. */
     data class Math(val tex: String) : MdBlock
     data object Rule : MdBlock
@@ -109,6 +116,40 @@ object Md {
     val QUOTE = Regex("""^>\s?(.*)$""")
     private val RULE = Regex("""^\s*([-*_])(\s*\1){2,}\s*$""")
     private val FENCE = Regex("""^\s*```""")
+    private val FENCE_LANG = Regex("""^\s*```\s*([\w+#.-]*)""")
+    private val TABLE_DELIMITER = Regex("""^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$""")
+
+    /** Cells of a table row: split on `|` that is not escaped, outer pipes optional. */
+    fun tableCells(line: String): List<String> {
+        var t = line.trim()
+        if (t.startsWith("|")) t = t.substring(1)
+        if (t.endsWith("|") && !t.endsWith("\\|")) t = t.dropLast(1)
+        return t.split(Regex("""(?<!\\)\|""")).map { it.trim().replace("\\|", "|") }
+    }
+
+    /** The table starting at [lines][at], or null; the second value is the line after it. */
+    private fun table(lines: List<String>, at: Int): Pair<MdBlock.Table, Int>? {
+        if (at + 1 >= lines.size || '|' !in lines[at] || '|' !in lines[at + 1]) return null
+        if (!TABLE_DELIMITER.matches(lines[at + 1])) return null
+        val header = tableCells(lines[at])
+        val delimiter = tableCells(lines[at + 1])
+        if (header.size != delimiter.size) return null
+        val align = delimiter.map {
+            when {
+                it.startsWith(":") && it.endsWith(":") -> MdAlign.CENTER
+                it.endsWith(":") -> MdAlign.END
+                else -> MdAlign.START
+            }
+        }
+        val rows = mutableListOf<List<String>>()
+        var i = at + 2
+        while (i < lines.size && lines[i].isNotBlank() && '|' in lines[i]) {
+            val cells = tableCells(lines[i])
+            rows += List(header.size) { cells.getOrElse(it) { "" } }
+            i++
+        }
+        return MdBlock.Table(header, align, rows) to i
+    }
 
     /**
      * Inline tokens, earliest match wins: code, bold, strike, italic, link, bare URL, formula.
@@ -144,6 +185,7 @@ object Md {
             val line = lines[i]
             if (FENCE.containsMatchIn(line)) {
                 flush()
+                val lang = FENCE_LANG.find(line)?.groupValues?.get(1).orEmpty().lowercase()
                 val code = StringBuilder()
                 i++
                 while (i < lines.size && !FENCE.containsMatchIn(lines[i])) {
@@ -151,8 +193,15 @@ object Md {
                     code.append(lines[i])
                     i++
                 }
-                out += MdBlock.Code(code.toString())
+                out += MdBlock.Code(code.toString(), lang)
                 i++
+                continue
+            }
+            val table = table(lines, i)
+            if (table != null) {
+                flush()
+                out += table.first
+                i = table.second
                 continue
             }
             val display = DISPLAY_MATH.matchEntire(line)
@@ -425,6 +474,7 @@ fun MarkdownText(
     }
     val textPx = with(LocalDensity.current) { body1.fontSize.toPx() }
     val math = remember(textPx, scheme.onSurface) { MathRenderer(textPx, scheme.onSurface.toArgb()) }
+    val codeColors = remember(scheme) { CodeColors(scheme.primary, scheme.tertiary, scheme.secondary, scheme.outline) }
     fun inl(t: String) = inline(t, colors, onLink, math = math).dimmed(find, dim)
     fun tex(t: String) = math.inlineContent(t)
 
@@ -488,13 +538,24 @@ fun MarkdownText(
                         )
                     }
                 }
+                is MdBlock.Table -> Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    TableGrid(block, scheme.outlineVariant, scheme.surfaceContainerHighest) { text, header, align ->
+                        FindText(
+                            inl(text), find,
+                            style = if (header) body1.copy(fontWeight = FontWeight.Bold) else body1,
+                            textAlign = align.textAlign(),
+                            inlineContent = tex(text),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
                 is MdBlock.Code -> Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = scheme.surfaceContainerHighest,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     FindText(
-                        AnnotatedString(block.text).dimmed(find, dim), find,
+                        highlight(block.text, block.lang, codeColors).dimmed(find, dim), find,
                         style = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 14.sp, lineHeight = 20.sp, color = scheme.onSurface),
                         modifier = Modifier.horizontalScroll(rememberScrollState()).padding(12.dp),
                         softWrap = false,
@@ -505,6 +566,57 @@ fun MarkdownText(
         }
     }
 }
+
+/**
+ * A table at its natural width: every column as wide as its widest cell (a long cell wraps at
+ * [CELL_MAX]), every row as tall as its tallest. Wider than the screen, it scrolls sideways.
+ */
+@Composable
+private fun TableGrid(
+    table: MdBlock.Table,
+    line: Color,
+    headerBackground: Color,
+    cell: @Composable (text: String, header: Boolean, align: MdAlign) -> Unit,
+) {
+    val rows = listOf(table.header) + table.rows
+    val shape = RoundedCornerShape(8.dp)
+    Layout(
+        content = {
+            rows.forEachIndexed { r, row ->
+                row.forEachIndexed { c, text ->
+                    Box(
+                        Modifier
+                            .then(if (r == 0) Modifier.background(headerBackground) else Modifier)
+                            .border(0.5.dp, line)
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) { cell(text, r == 0, table.align[c]) }
+                }
+            }
+        },
+        modifier = Modifier.clip(shape).border(1.dp, line, shape),
+    ) { measurables, _ ->
+        val cols = table.header.size
+        val cap = CELL_MAX.roundToPx()
+        val widths = IntArray(cols)
+        measurables.forEachIndexed { i, m -> widths[i % cols] = maxOf(widths[i % cols], minOf(m.maxIntrinsicWidth(Int.MAX_VALUE), cap)) }
+        val heights = IntArray(rows.size)
+        measurables.forEachIndexed { i, m -> heights[i / cols] = maxOf(heights[i / cols], m.minIntrinsicHeight(widths[i % cols])) }
+        val placeables = measurables.mapIndexed { i, m -> m.measure(Constraints.fixed(widths[i % cols], heights[i / cols])) }
+        layout(widths.sum(), heights.sum()) {
+            var y = 0
+            for (r in rows.indices) {
+                var x = 0
+                for (c in 0 until cols) {
+                    placeables[r * cols + c].place(x, y)
+                    x += widths[c]
+                }
+                y += heights[r]
+            }
+        }
+    }
+}
+
+private val CELL_MAX = 240.dp
 
 private fun MdAlign.textAlign() = when (this) {
     MdAlign.START -> TextAlign.Start

@@ -1,5 +1,6 @@
 package app.palimpsest.ui
 
+import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -94,6 +95,44 @@ class MdTest {
         // A block the preview cut off loses its opening `$$` and stays text.
         assertEquals("a\n\\frac{1}{2}", previewPlain("a\n\$\$\n\\frac{1}{2}"))
         assertEquals(listOf("x^2", "E=mc^2", "y"), previewFormulas("sum \$x^2\$\n\$\$E=mc^2\$\$\n\$y\$"))
+    }
+
+    @Test
+    fun tables() {
+        val blocks = Md.parse("before\n| a | b \\| c | d |\n|:--|:-:|--:|\n| 1 | **2** |\n| x | y | z | extra |\nafter\n\nno | table\n--- | ---- | -")
+        assertEquals(MdBlock.Paragraph("before"), blocks[0])
+        assertEquals(
+            MdBlock.Table(
+                listOf("a", "b | c", "d"),
+                listOf(MdAlign.START, MdAlign.CENTER, MdAlign.END),
+                listOf(listOf("1", "**2**", ""), listOf("x", "y", "z")),
+            ),
+            blocks[1],
+        )
+        assertEquals(MdBlock.Paragraph("after"), blocks[2])
+        // A delimiter row with another number of cells is not a table.
+        assertEquals(MdBlock.Paragraph("no | table\n--- | ---- | -"), blocks[3])
+        assertEquals(4, blocks.size)
+        // A rule under a line is still a rule.
+        assertEquals(listOf(MdBlock.Paragraph("text"), MdBlock.Rule), Md.parse("text\n---"))
+    }
+
+    @Test
+    fun codeIsHighlightedByLanguage() {
+        assertEquals(MdBlock.Code("val x = 1", "kotlin"), Md.parse("```Kotlin\nval x = 1\n```").single())
+        val colors = CodeColors(Color.Red, Color.Green, Color.Blue, Color.Gray)
+        fun spans(code: String, lang: String) = highlight(code, lang, colors).let { a ->
+            a.spanStyles.map { a.text.substring(it.start, it.end) to it.item.color }
+        }
+        assertEquals(
+            listOf("fun" to Color.Red, "\"a // b\"" to Color.Green, "42" to Color.Blue, "// note" to Color.Gray),
+            spans("fun f() = \"a // b\" + 42 // note", "kotlin"),
+        )
+        assertEquals(listOf("def" to Color.Red, "None" to Color.Blue, "# x2" to Color.Gray), spans("def f(): return None # x2", "py").filter { it.first != "return" })
+        // A lifetime is not a char literal; a char is.
+        assertEquals(listOf("fn" to Color.Red, "'x'" to Color.Green), spans("fn f<'a>(c = 'x')", "rust"))
+        assertEquals(listOf("SELECT" to Color.Red, "'v'" to Color.Green), spans("SELECT 'v'", "sql"))
+        assertEquals(emptyList<Pair<String, Color>>(), spans("val x = 1", ""))
     }
 
     @Test
