@@ -35,42 +35,50 @@ Detectors:
 This is a model of block counts, not of real files. It gives an **upper bound** for this
 adversary and a simple detector; a smart adversary with more snapshots is stronger.
 
-## Result 1: the current policy (bursts of 1% × 16–128 blocks)
+## Result 1: the production policy (bursts of 0.5% × 64–2048 blocks, since 0.3.1)
 
 | days between snapshots | hidden sessions a day | erasing | changed-block detector | growth AUC | caught by growth at 5% false |
 |---:|---:|---|---:|---:|---:|
-| 7 | 0.2 | immediate | 14.6% | 0.62 | 7% |
-| 7 | 0.2 | manual | **0%** | 0.63 | 7% |
-| 7 | 1 | immediate | 55% | 0.85 | 14% |
-| 7 | 1 | manual | **0%** | 0.85 | 14% |
-| 30 | 0.2 | immediate | 50% | 0.65 | 9% |
-| 30 | 0.2 | manual | **0%** | 0.65 | 9% |
-| 30 | 1 | immediate | 97% | 0.90 | 47% |
-| 30 | 1 | manual | **0%** | 0.90 | 47% |
-| 30 | 3 | immediate | 100% | 1.00 | 100% |
-| 90 | 1 | immediate | 100% | 0.99 | 92% |
-| 90 | 1 | manual | **0%** | 0.99 | 92% |
+| 7 | 0.2 | immediate | 14.6% | 0.55 | 6% |
+| 7 | 0.2 | manual | **0%** | 0.55 | 6% |
+| 7 | 1 | immediate | 56% | 0.71 | 9% |
+| 7 | 1 | manual | **0%** | 0.71 | 9% |
+| 30 | 0.2 | immediate | 50% | 0.57 | 6% |
+| 30 | 0.2 | manual | **0%** | 0.57 | 6% |
+| 30 | 1 | immediate | 97% | 0.75 | 14% |
+| 30 | 1 | manual | **0%** | 0.75 | 13% |
+| 30 | 3 | immediate | 100% | 0.86 | 34% |
+| 30 | 3 | manual | **0%** | 0.86 | 34% |
+| 90 | 0.2 | manual | **0%** | 0.56 | 7% |
+| 90 | 1 | immediate | 100% | 0.74 | 21% |
+| 90 | 1 | manual | **0%** | 0.74 | 22% |
+| 90 | 3 | manual | **0%** | 0.93 | 65% |
 
 Conclusions:
 * **Immediate erasing gives a hidden vault away** if old entries in it are edited: within a
   month almost certainly. Manual mode removes this channel entirely.
 * **Growth remains.** While the hidden vault writes much less than the decoy (0.2 sessions a
-  day against 1), telling them apart is hard (AUC 0.65). With comparable or higher activity
-  the adversary catches half of such users within a month and almost all within three.
+  day against 1), it is close to guessing (AUC 0.56–0.57). With the same activity as the decoy
+  the adversary catches about one in eight such users within a month and one in five within
+  three; with three times the decoy's activity, a third and two thirds.
 
 ## Result 2: larger and rarer bursts (manual erasing)
 
+How the production policy was chosen. The policy before 0.3.1 is the first row.
+
 | bursts | chaff, MB/year | AUC 30 d, 0.2/day | AUC 30 d, 1/day | AUC 30 d, 3/day | AUC 90 d, 1/day | caught at 5%, 30 d, 1/day |
 |---|---:|---:|---:|---:|---:|---:|
-| 1% × 16–128 (now) | 7 | 0.65 | 0.91 | 1.00 | 0.99 | 48% |
-| 1% × 16–512 | 14 | 0.59 | 0.77 | 0.93 | 0.86 | 19% |
+| 1% × 16–128 (before 0.3.1) | 7 | 0.65 | 0.91 | 1.00 | 0.99 | 48% |
+| 1% × 16–512 | 14 | 0.59 | 0.77 | 0.93 | 0.86 | 20% |
 | 1% × 64–1024 | 23 | 0.56 | 0.72 | 0.89 | 0.80 | 16% |
-| 0.5% × 64–2048 | 23 | 0.57 | 0.75 | 0.86 | 0.74 | 14% |
-| 0.2% × 256–4096 | 20 | 0.60 | 0.84 | 0.90 | 0.77 | 10% |
+| **0.5% × 64–2048 (production)** | 23 | 0.57 | 0.75 | 0.86 | 0.74 | 14% |
+| 0.2% × 256–4096 | 19 | 0.60 | 0.84 | 0.90 | 0.77 | 10% |
 
 What hides a vault is not the amount of chaff but its **spread**: rare large bursts make the
 file's growth noisy, and the hidden vault's share of it gets lost. Three times the space
-(7 → 23 MB a year) brings the share caught within a month down from 48% to 14–16%. No policy
+(7 → 23 MB a year) brings the share caught within a month down from 48% to 14–16%.
+0.5% × 64–2048 was chosen as the most even: it is not the best in any single column, but it
+holds up best as the snapshots get further apart and the hidden vault gets busier. No policy
 reaches indistinguishability (AUC 0.5) for an active hidden vault: any chaff without a
 secret, which cannot be kept outside the vaults, averages out over time.
 

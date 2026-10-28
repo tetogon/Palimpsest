@@ -200,8 +200,9 @@ fn main() {
         }
     }
 
+    // The first one is the policy before 0.3.1; the production policy is among the others.
     let candidates = [
-        chaff::POLICY,
+        Policy { burst_per_10k: 100, burst_min: 16, burst_max: 128 },
         Policy { burst_per_10k: 100, burst_min: 16, burst_max: 512 },
         Policy { burst_per_10k: 100, burst_min: 64, burst_max: 1024 },
         Policy { burst_per_10k: 50, burst_min: 64, burst_max: 2048 },

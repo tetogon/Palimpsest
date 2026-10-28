@@ -407,7 +407,7 @@ vault is open and whether any is:
 | every commit (a write batch) | `G + ceil(U · w)` |
 | session end, even without writes | `G` |
 | a background job once a day (WorkManager), with probability ½ | `G` |
-| with probability 1/100 on any of the above | another `uniform(16, 128)` |
+| with probability 1/200 on any of the above | another `uniform(64, 2048)` |
 
 `G ~ Geometric(½)` on {0, 1, 2, …} (mean 1), `U ~ Uniform[0,1)`, `w` = the number of
 non-chaff blocks in the batch. Chaff is shuffled together with the batch's data.
@@ -415,9 +415,9 @@ non-chaff blocks in the batch. Chaff is shuffled together with the batch's data.
 The `U·w` term makes the growth of unknown blocks correlate with the amount written to any
 vault. Then a large write to a hidden vault looks like a large write to the decoy plus chaff.
 
-These are **starting** parameters, to be tuned by simulating a distinguisher (§12, T5).
-Cost estimate: 3 sessions a day give ≈ 2–3 blocks per session, that is ≈ 10–12 MiB a year
-plus `w/2` of the amount written.
+The bursts are rare and large on purpose: their spread, not the mean, hides a hidden vault's
+growth. The parameters were picked by simulating a distinguisher (§12, T5,
+[t5-simulation.md](t5-simulation.md)). Cost: ≈ 23 MB a year at one session a day.
 
 ## 10. Vault settings (settings PUT, tags 0x40–0x7F)
 

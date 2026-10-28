@@ -26,8 +26,8 @@ pub struct Policy {
     pub burst_max: u32,
 }
 
-/// Production policy.
-pub const POLICY: Policy = Policy { burst_per_10k: 100, burst_min: 16, burst_max: 128 };
+/// Production policy: 0.5% × 64–2048 blocks, picked from the candidates in the T5 simulation.
+pub const POLICY: Policy = Policy { burst_per_10k: 50, burst_min: 64, burst_max: 2048 };
 
 pub fn on_create() -> usize {
     16 + random_below(49) as usize
@@ -83,5 +83,32 @@ fn burst(r: &mut impl Rng, p: &Policy) -> usize {
         (p.burst_min + r.below(p.burst_max - p.burst_min + 1)) as usize
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Lcg(u64);
+
+    impl Rng for Lcg {
+        fn below(&mut self, bound: u32) -> u32 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((self.0 >> 33) % bound as u64) as u32
+        }
+    }
+
+    #[test]
+    fn bursts_are_rare_large_and_in_range() {
+        let mut r = Lcg(1);
+        let draws = 400_000;
+        let bursts: Vec<usize> = (0..draws).map(|_| burst(&mut r, &POLICY)).filter(|&n| n > 0).collect();
+        let rate = bursts.len() as f64 / draws as f64;
+        assert!((0.004..0.006).contains(&rate), "burst rate {rate}");
+        assert!(bursts.iter().all(|&n| (64..=2048).contains(&n)));
+        let mean = bursts.iter().sum::<usize>() as f64 / bursts.len() as f64;
+        assert!((950.0..1160.0).contains(&mean), "burst mean {mean}");
+        assert!((burst_mean(&POLICY) - 5.28).abs() < 1e-9);
     }
 }
