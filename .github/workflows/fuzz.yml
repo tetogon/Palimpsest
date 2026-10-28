@@ -23,14 +23,14 @@ jobs:
       run:
         working-directory: core-rs
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: core-rs
       - run: cargo test --locked --features fuzzing --lib fuzzing
       - name: Seeds
         run: FUZZ_SEED_DIR="$PWD/fuzz/seeds" cargo test --locked --features fuzzing --lib write_fuzz_seeds -- --ignored
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: fuzz-seeds
           path: core-rs/fuzz/seeds
@@ -51,16 +51,16 @@ jobs:
       # Every run writes two small container files; keep them in memory.
       TMPDIR: /dev/shm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-fuzz
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fuzz-seeds
           path: core-rs/fuzz/seeds
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: core-rs/fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -75,7 +75,7 @@ jobs:
             -max_total_time="$SECONDS_PER_TARGET" -max_len=65536 -timeout=10 -rss_limit_mb=2048
       - name: Crash input
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crash-${{ matrix.target }}
           path: core-rs/fuzz/artifacts/${{ matrix.target }}
