@@ -91,8 +91,8 @@ android {
         targetSdk = 34
         // Written out, not computed: F-Droid reads them from this file. A release bumps both
         // (1.2.3 -> 10203) and is tagged v<versionName>; release.yml checks that they match.
-        versionCode = 300
-        versionName = "0.3.0"
+        versionCode = 301
+        versionName = "0.3.1"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
         }
