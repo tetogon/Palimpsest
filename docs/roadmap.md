@@ -39,6 +39,7 @@ Ground rules:
 - [x] Photos in the text: left / centre / right, three sizes, text beside them
 - [x] One undo history for the whole entry, layout changes included
 - [x] LaTeX formulas (`$…$`, `$$…$$`) drawn natively in read mode and on the cards
+- [x] Tables (GitHub syntax, column alignment) and code highlighting by the fence's language
 
 ## Stage 5. Attachments
 - [x] BLOB objects (§6.4), thumbnails, a size limit
@@ -58,8 +59,8 @@ Ground rules:
 ## Stage 8. Publishing
 - [x] Release builds from tags
 - [x] F-Droid listing (fastlane metadata)
-- [ ] F-Droid release
-- [ ] Reproducible builds
+- [x] F-Droid release
+- [x] Reproducible builds
 
 ## Later
 Export to `.md`/ZIP in plaintext (with a warning).

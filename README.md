@@ -5,7 +5,7 @@ any number of vaults, and no way to tell from the file how many there are.
 
 [![CI](https://github.com/tetogon/palimpsest/actions/workflows/ci.yml/badge.svg)](https://github.com/tetogon/palimpsest/actions/workflows/ci.yml)
 [![Fuzz](https://github.com/tetogon/palimpsest/actions/workflows/fuzz.yml/badge.svg)](https://github.com/tetogon/palimpsest/actions/workflows/fuzz.yml)
-[![License: GPL v3](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+[![License: GPL v3 or later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 ![Palimpsest: notes, diary and to-dos, encrypted, with another layer underneath](docs/screenshots/banner.jpg)
 
@@ -42,6 +42,8 @@ anyone holding the file:
   you are editing. Formatting bar, alignment, and one undo history for the whole entry.
 - LaTeX formulas, `$…$` in a line and `$$…$$` on their own, drawn natively in read mode
   and on the cards.
+- Tables in the GitHub syntax, with column alignment, and code blocks highlighted by
+  language (` ```kotlin `, ` ```python `, ` ```rust ` and a dozen more).
 - Photos and voice notes. The in-app camera and recorder work in memory only, so nothing
   reaches the gallery. Photos are cropped and rotated before they are stored, and EXIF
   (including GPS) is dropped. Drag a photo into the text and place it left, centre or right
@@ -136,4 +138,6 @@ SHA-256: 4e79c9360ba7e8ab2449ad243a0eaa2296bd74d7224412ff8e49e507e4d37b8b
 
 ## License
 
-Palimpsest is free software under the [GNU General Public License v3.0](LICENSE).
+Palimpsest is free software: you can redistribute it and/or modify it under the terms of the
+[GNU General Public License](LICENSE) as published by the Free Software Foundation, either
+version 3 of the License, or (at your option) any later version (`GPL-3.0-or-later`).
