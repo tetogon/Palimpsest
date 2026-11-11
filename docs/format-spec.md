@@ -97,6 +97,7 @@ password re-encrypts only the KEYWRAP). From `V`:
 | 3 | `K_blob_loc` | locator of attachment blocks |
 | 4 | `K_pad_loc` | locator of PAD |
 | 5 | `K_blob_nonce` | derivation of the nonces of attachment parts (§6.4) |
+| 6 | `K_erase` | the mark on the vault's own erased blocks (§8.2) |
 
 `kdf(V, id, CTX_VK)`.
 
@@ -351,18 +352,21 @@ the protocol are described separately. Requirements for a transport:
 
 * carry only whole blocks;
 * never require the core to tell blocks apart (the server does not know whose a block is);
-* the transport's settings are kept **inside the vault** (a settings PUT), and syncing runs
-  only while that vault is open (§10).
+* never take in more than a limit without asking: blocks cannot be checked without a
+  password, and whatever a merge adds stays in the file.
 
 The Android app's transport is one document reached through the system file picker (a file in
 Google Drive, Proton Drive, a Cryptomator vault, a Syncthing folder), so the app needs no
 network permission. One sync: read the document, merge it in, write the whole container back,
-skipping the write when the document already holds exactly this container. A sync runs when
-the vault holding the setting is unlocked, when the app goes to the background and on demand.
-A device joins by restoring from the document first: merging needs equal salt blocks.
+skipping the write when the document already holds exactly this container. Merging needs no
+password, so a sync runs with or without an open vault: when the app starts, when a vault is
+unlocked, when the app goes to the background and on demand. Past 50 MiB of new blocks it
+waits for the user's yes. A device joins by restoring from the document first: merging needs
+equal salt blocks.
 
-Setting 0x42 `sync` is a nested TLV: 0x01 transport u8 (1 = a picked document), 0x02 its URI
-(UTF-8).
+Which document is a choice of each device, like the system's grant to read it, so it lives in
+the app's settings, outside the vaults (§10): a link to the document says nothing about how
+many vaults the container holds.
 
 ## 8. Deletion
 
@@ -379,12 +383,35 @@ losing them would bring a deleted entry back or give an old password its power b
 
 ### 8.2 Physical deletion (purge)
 
-Every block of a dead object is overwritten **in place**: a fresh PAD of the same vault is
-written instead. The file size does not change.
+Every block of a dead object is overwritten **in place**, and keeps its nonce:
 
-* Blocks made **in the current session** and not yet synced anywhere (autosaved drafts, for
+```
+erased = nonce ‖ BLAKE2b-128(key = K_erase, msg = nonce) ‖ random[4056]
+```
+
+To anyone without the vault key it is a nonce and random bytes, like any block. The vault
+recognises its own erased blocks by the mark and skips them. Keeping the nonce matters for
+merging (§7.3): a copy that still has the old block offers nothing this file lacks, so erased
+content never comes back from a backup, a sync file or another device. A new body is not
+sealed under `K_enc`: a second plaintext under the same nonce and key would give the first one
+away. The file size does not change. (Before 0.4.0 a fresh PAD with a new nonce was written
+instead, §6.5; such PADs stay valid.)
+
+Shredding **another** vault (the wipe rule, §10.1; deleting a vault, §10.3) and the old
+KEYWRAP of a password change keep writing chaff with a fresh nonce: a block that still matched
+a password's locator but did not decrypt would tell whoever later gets that password that the
+vault existed. The price is that a wiped or deleted vault comes back from copies made before,
+a sync file included; the app warns about it.
+
+An attachment's part nonces are computed from its seed (§6.4), so an erased attachment's
+nonces stay taken: an import that would give the same content the same seed again (§11.7)
+moves on to the next seed in line, `BLAKE2b-128(K_blob_nonce, "plmp1-import-content" ‖
+content ‖ u32(k))` for k = 1, 2, …
+
+* Blocks made **in the current session** and not yet copied anywhere (autosaved drafts, for
   instance) are always overwritten at once. No snapshot of the file has had them yet, so
-  overwriting them gives nothing away.
+  overwriting them gives nothing away. A backup or a sync that copies the file out ends that:
+  blocks born before it wait like older ones.
 * Blocks from earlier sessions are overwritten according to the vault setting `purge_mode`:
   `immediate` (the default) or `manual`. Overwriting an old unknown block is visible to an
   adversary with two snapshots of the file and the password of another vault (see the threat
@@ -402,8 +429,10 @@ threat model says so.
 
 ### 8.3 Reclaiming space (by hand)
 
-"Reclaim space" in an open vault removes its PAD blocks and compacts the heap. The file
-shrinks, and that shows when snapshots are compared. So it is only by hand, with a warning.
+"Reclaim space" in an open vault removes its erased blocks (and PADs) and compacts the heap.
+The file shrinks, and that shows when snapshots are compared; and once an erased block is
+gone, merging an earlier copy brings the old block back (to be erased again). So it is only by
+hand, with a warning.
 Chaff is never removed: it cannot be told apart from other vaults.
 
 ## 9. Chaff
@@ -435,7 +464,7 @@ growth. The parameters were picked by simulating a distinguisher (§12, T5,
 |---|---|---|
 | 0x40 | reserved (was `duress_wipe`, replaced by 0x45) | — |
 | 0x41 | `purge_mode`: immediate / manual | immediate |
-| 0x42 | `sync`: transport and credentials (nested TLV) | none |
+| 0x42 | reserved (sync settings live on each device, §7.3) | — |
 | 0x43 | `autolock_s` | 60 |
 | 0x44 | `biometric`: whether biometric unlock is allowed | off |
 | 0x45 | `wipe_target`: locators of the vault to destroy at the next unlock (§10.1) | none |
@@ -445,7 +474,8 @@ the list of entries.
 
 **Outside the vaults** (in the app's ordinary settings) anything that depends on the number of
 vaults or their properties MUST NOT be kept. Allowed: the language, the theme of the unlock
-screen, a counter of failed attempts, one biometric wrap (§10.2).
+screen, a counter of failed attempts, one biometric wrap (§10.2), the lock delays, the sync
+document (§7.3).
 
 ### 10.1 wipe_target: "on opening, destroy another vault"
 
@@ -562,8 +592,9 @@ export format: it would have a signature of its own.
   it holds. **Restoring** replaces the container with the copy whole, and only after a
   password the user types opens some vault in the copy: any file of the right shape (a length
   that is a multiple of 4096, at least two blocks) looks like a container, and replacing cannot
-  be undone. `nonces.bin` is removed. Copies are not merged: that would bring back wiped and
-  deleted vaults.
+  be undone. `nonces.bin` is removed. Restoring never merges: the copy replaces the file
+  whole. Merging copies is a separate action (§7.3), and it brings back vaults wiped or
+  deleted since the copy was made.
 * **Exporting a vault** makes a new container (a new salt, its own initial chaff) holding one
   vault with a **new** `V` under the export password. The head PUTs of all entries and
   folders are carried over with the same `entry_id`, `hlc`, `created_ms`, date, tags and
