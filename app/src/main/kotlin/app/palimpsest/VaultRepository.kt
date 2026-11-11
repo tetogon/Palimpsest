@@ -144,6 +144,68 @@ class VaultRepository(private val file: File, private val transfers: File) {
     }
 
     /**
+     * Merges a copy of this container (another phone's, an older backup) into it: the blocks it
+     * has and this file lacks are added, for every vault at once, without a password (spec
+     * §7.3). The open vault re-reads itself. Returns how many blocks came in. Throws
+     * [app.palimpsest.ffi.CoreException.Invalid] for a file of another container.
+     */
+    fun mergeFrom(input: InputStream): UInt {
+        val dir = scratch()
+        try {
+            val copy = File(dir, "merge.bin")
+            copy.outputStream().use { input.copyTo(it) }
+            return mergeFile(copy)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    private fun mergeFile(copy: File): UInt {
+        val added = container.mergeFrom(copy.absolutePath)
+        if (added > 0u) _session.value?.reload()
+        return added
+    }
+
+    private val syncLock = Any()
+
+    /**
+     * Two-way sync with a document in a cloud drive (or a Syncthing folder), reached through the
+     * system file picker: its blocks are merged in, then the whole container is written back.
+     * An empty document just receives the container. Nothing is written when the document
+     * already holds exactly this container: every upload is one more copy for the provider.
+     * Returns how many blocks came in.
+     */
+    fun syncWith(open: () -> InputStream?, write: () -> OutputStream?): UInt = synchronized(syncLock) {
+        val dir = scratch()
+        try {
+            val remote = File(dir, "remote.bin")
+            (open() ?: error("cannot read the sync file")).use { input -> remote.outputStream().use { input.copyTo(it) } }
+            val added = if (remote.length() > 0) mergeFile(remote) else 0u
+            val local = File(dir, "local.bin")
+            container.backupTo(local.absolutePath)
+            if (!sameContent(local, remote)) {
+                (write() ?: error("cannot write the sync file")).use { out -> local.inputStream().use { it.copyTo(out) } }
+            }
+            added
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    private fun sameContent(a: File, b: File): Boolean {
+        if (a.length() != b.length()) return false
+        a.inputStream().buffered().use { x ->
+            b.inputStream().buffered().use { y ->
+                while (true) {
+                    val c = x.read()
+                    if (c != y.read()) return false
+                    if (c < 0) return true
+                }
+            }
+        }
+    }
+
+    /**
      * Writes this vault, under [password], into a new container file and returns it; the
      * caller copies it out and calls [discard].
      */

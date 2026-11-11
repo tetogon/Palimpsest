@@ -28,7 +28,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Create
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
@@ -285,7 +288,7 @@ private fun CreateVaultScreen(
 
 // ---- Settings: app first, this vault below -------------------------------------------------
 
-private enum class SettingsDialog { IDLE, BACKGROUND, CHANGE_PASSWORD, WIPE, RECLAIM, DELETE_VAULT, RESTORE, RESTORE_PASSWORD, IMPORT, EXPORT }
+private enum class SettingsDialog { IDLE, BACKGROUND, CHANGE_PASSWORD, WIPE, RECLAIM, DELETE_VAULT, RESTORE, RESTORE_PASSWORD, IMPORT, EXPORT, MERGE, SYNC, MD_EXPORT }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -323,6 +326,10 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
         }
     }
     val exportTo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(binary)) { uri -> vm.finishExport(uri) }
+    val mergeFrom = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::merge) }
+    val syncPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::startSync) }
+    val syncCreate = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(binary)) { uri -> uri?.let(vm::startSync) }
+    val markdownTo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> uri?.let(vm::exportMarkdown) }
     LaunchedEffect(ui.exportReady) { if (ui.exportReady) exportTo.launch("notes-$stamp.bin") }
 
     Scaffold(
@@ -406,6 +413,7 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
                 ActionRow(UploadIcon, R.string.backup_all, R.string.backup_all_hint) { backupTo.launch("backup-$stamp.bin") }
                 ActionRow(DownloadIcon, R.string.import_vault, R.string.import_vault_hint) { importFrom.launch(arrayOf("*/*")) }
                 ActionRow(RestoreIcon, R.string.restore_all, R.string.restore_all_hint) { dialog = SettingsDialog.RESTORE }
+                ActionRow(Icons.Filled.AddCircle, R.string.merge_all, R.string.merge_all_hint) { dialog = SettingsDialog.MERGE }
             }
 
             if (withVault) {
@@ -414,6 +422,8 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
                 Group {
                     ActionRow(Icons.Filled.Person, R.string.change_password, null) { dialog = SettingsDialog.CHANGE_PASSWORD }
                     ActionRow(UploadIcon, R.string.export_vault, R.string.export_vault_hint) { dialog = SettingsDialog.EXPORT }
+                    ValueRow(Icons.Filled.Share, R.string.sync_title, ui.syncName ?: stringResource(R.string.sync_off)) { dialog = SettingsDialog.SYNC }
+                    ActionRow(Icons.Filled.Create, R.string.md_export, R.string.md_export_hint) { dialog = SettingsDialog.MD_EXPORT }
                     SwitchRow(Icons.Filled.Refresh, R.string.purge_manual, R.string.purge_hint_short, ui.purgeManual, vm::setPurgeManual)
                     if (ui.purgeManual) {
                         ValueRow(null, R.string.purge_now, stringResource(R.string.kb, ui.pendingPurgeBlocks * 4)) {
@@ -470,6 +480,22 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
             close()
         }, onDismiss = { importUri = null; close() })
         SettingsDialog.EXPORT -> ExportDialog(onSubmit = { p, r -> vm.prepareExport(p, r); close() }, onDismiss = close)
+        SettingsDialog.MERGE -> ConfirmDialog(R.string.merge_confirm, R.string.merge_button, danger = false, onConfirm = {
+            close()
+            mergeFrom.launch(arrayOf("*/*"))
+        }, onDismiss = close)
+        SettingsDialog.SYNC -> SyncDialog(
+            current = ui.syncName,
+            onPick = { close(); syncPick.launch(arrayOf("*/*")) },
+            onCreate = { close(); syncCreate.launch("palimpsest-$stamp.bin") },
+            onSyncNow = { close(); vm.syncNow() },
+            onStop = { close(); vm.stopSync() },
+            onDismiss = close,
+        )
+        SettingsDialog.MD_EXPORT -> ConfirmDialog(R.string.md_export_confirm, R.string.md_export_button, danger = true, onConfirm = {
+            close()
+            markdownTo.launch("notes-$stamp.zip")
+        }, onDismiss = close)
         null -> Unit
     }
 }
@@ -585,6 +611,47 @@ private fun ConfirmDialog(@StringRes text: Int, @StringRes confirm: Int, danger:
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
+}
+
+/**
+ * Sync with a document in a cloud drive or a synced folder. Off: what it does, the risk, and
+ * the two ways in. On: sync now or stop.
+ */
+@Composable
+private fun SyncDialog(
+    current: String?,
+    onPick: () -> Unit,
+    onCreate: () -> Unit,
+    onSyncNow: () -> Unit,
+    onStop: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Filled.Share, null) },
+        title = { Text(stringResource(R.string.sync_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (current != null) Text(current, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                Text(stringResource(R.string.sync_explain), style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.sync_warning), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                if (current == null) {
+                    TextButton(onClick = onCreate) { Text(stringResource(R.string.sync_create)) }
+                    TextButton(onClick = onPick) { Text(stringResource(R.string.sync_pick)) }
+                }
+            }
+        },
+        confirmButton = {
+            if (current != null) TextButton(onClick = onSyncNow) { Text(stringResource(R.string.sync_now)) }
+        },
+        dismissButton = {
+            if (current != null) {
+                TextButton(onClick = onStop) { Text(stringResource(R.string.sync_stop), color = MaterialTheme.colorScheme.error) }
+            } else {
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+            }
+        },
     )
 }
 

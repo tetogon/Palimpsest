@@ -8,7 +8,9 @@ import app.palimpsest.AppSettings
 import app.palimpsest.PalimpsestApp
 import app.palimpsest.R
 import android.graphics.Bitmap
+import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.LruCache
 import app.palimpsest.ImagePrep
 import app.palimpsest.VoicePlayer
@@ -103,6 +105,8 @@ data class UiState(
     /** Own PAD blocks that "reclaim space" would free. */
     val reclaimableBlocks: Int = 0,
     val purgeManual: Boolean = false,
+    /** Display name of the document this vault syncs the container with; null when off. */
+    val syncName: String? = null,
     /** Blocks of replaced revisions waiting for "erase now" (manual mode). */
     val pendingPurgeBlocks: Int = 0,
     val appSettings: AppSettings.Values = AppSettings.Values(),
@@ -151,7 +155,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         repo.beforeLock = { session -> saveDraft(session) }
-        repo.onBackground = { session -> autosave(session) }
+        repo.onBackground = { session ->
+            autosave(session)
+            autoSync(session)
+        }
         viewModelScope.launch(Dispatchers.IO) {
             while (true) {
                 delay(AUTOSAVE_MS)
@@ -167,6 +174,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     _ui.value = UiState(appSettings = settings.values.value)
                 } else {
                     showList(session)
+                    autoSync(session)
                 }
             }
         }
@@ -673,9 +681,83 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 reclaimableBlocks = session.reclaimableBlocks().toInt(),
                 purgeManual = session.purgeMode() == PurgeMode.MANUAL,
                 pendingPurgeBlocks = session.pendingPurgeBlocks().toInt(),
+                syncName = session.syncUri()?.let { u -> displayName(Uri.parse(u)) },
                 info = null,
             )
         }
+    }
+
+    /** A copy of this container from another phone or an older backup; see [VaultRepository.mergeFrom]. */
+    fun merge(uri: Uri) = work {
+        val result = runCatching { resolver.openInputStream(uri)?.use(repo::mergeFrom) ?: error("no input") }
+        when {
+            result.isFailure -> fail(if (result.exceptionOrNull() is CoreException.Invalid) R.string.not_this_container else R.string.error_generic)
+            result.getOrNull() == 0u -> done(R.string.merge_nothing)
+            else -> {
+                repo.session.value?.let(::refresh)
+                done(R.string.merge_done)
+            }
+        }
+    }
+
+    /**
+     * Syncs with [uri] from now on: the app keeps its access to the document across restarts,
+     * and this vault remembers it (spec §10), so syncing runs only while this vault is open.
+     */
+    fun startSync(uri: Uri) = work {
+        val session = repo.session.value ?: return@work
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        resolver.takePersistableUriPermission(uri, flags)
+        session.setSyncUri(uri.toString())
+        _ui.update { it.copy(syncName = displayName(uri)) }
+        syncWith(session, uri, manual = true)
+    }
+
+    fun stopSync() = work {
+        val session = repo.session.value ?: return@work
+        session.syncUri()?.let { u ->
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching { resolver.releasePersistableUriPermission(Uri.parse(u), flags) }
+        }
+        session.setSyncUri(null)
+        _ui.update { it.copy(syncName = null) }
+        done(R.string.sync_stopped)
+    }
+
+    fun syncNow() = work {
+        val session = repo.session.value ?: return@work
+        val uri = session.syncUri()?.let(Uri::parse) ?: return@work
+        syncWith(session, uri, manual = true)
+    }
+
+    /** On unlock and when the app goes to the background; quiet, a failure waits for the next time. */
+    private fun autoSync(session: Session) {
+        val uri = runCatching { session.syncUri() }.getOrNull()?.let(Uri::parse) ?: return
+        runCatching { syncWith(session, uri, manual = false) }
+    }
+
+    private fun syncWith(session: Session, uri: Uri, manual: Boolean) {
+        val result = runCatching { repo.syncWith({ resolver.openInputStream(uri) }, { resolver.openOutputStream(uri, "wt") }) }
+        if (result.getOrNull()?.let { it > 0u } == true && repo.session.value === session) refresh(session)
+        if (!manual) return
+        when {
+            result.isSuccess -> done(R.string.sync_done)
+            result.exceptionOrNull() is CoreException.Invalid -> fail(R.string.sync_other_container)
+            else -> fail(R.string.sync_failed)
+        }
+    }
+
+    private fun displayName(uri: Uri): String = runCatching {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    }.getOrNull() ?: uri.lastPathSegment.orEmpty()
+
+    /** This vault as Markdown files and attachments in a ZIP, unencrypted, straight into [uri]. */
+    fun exportMarkdown(uri: Uri) = work {
+        val session = repo.session.value ?: return@work
+        resolver.openOutputStream(uri, "wt")?.use { MarkdownExport.write(session, it) } ?: error("no output")
+        done(R.string.md_export_done)
     }
 
     fun setPurgeManual(manual: Boolean) = work {
