@@ -301,7 +301,7 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
     val message = ui.info ?: ui.error
     LaunchedEffect(message) {
         if (message != null) {
-            snackbar.showSnackbar(context.getString(message))
+            snackbar.showSnackbar(context.getString(message, *listOfNotNull(ui.messageArg).toTypedArray()))
             vm.clearMessages()
         }
     }
@@ -327,8 +327,8 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
     }
     val exportTo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(binary)) { uri -> vm.finishExport(uri) }
     val mergeFrom = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::merge) }
-    val syncPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::startSync) }
-    val syncCreate = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(binary)) { uri -> uri?.let(vm::startSync) }
+    val syncPick = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let { vm.startSync(it, fresh = false) } }
+    val syncCreate = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(binary)) { uri -> uri?.let { vm.startSync(it, fresh = true) } }
     val markdownTo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri -> uri?.let(vm::exportMarkdown) }
     LaunchedEffect(ui.exportReady) { if (ui.exportReady) exportTo.launch("notes-$stamp.bin") }
 

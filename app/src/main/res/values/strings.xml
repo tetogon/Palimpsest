@@ -270,6 +270,7 @@
     <string name="sync_stop">Stop syncing</string>
     <string name="sync_done">Synced</string>
     <string name="sync_stopped">Sync is off</string>
+    <string name="sync_not_container">The sync file is not a container (%1$s bytes). If you just made it, choose it again with Existing file once the drive has uploaded it, or make a new one.</string>
     <string name="sync_failed">Could not reach the sync file</string>
     <string name="sync_other_container">The sync file holds another container. On a new phone, restore from it first.</string>
     <string name="md_export">Export as Markdown</string>

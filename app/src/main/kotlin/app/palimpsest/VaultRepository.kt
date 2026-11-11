@@ -6,6 +6,7 @@ import app.palimpsest.ffi.ChangePasswordResult
 import app.palimpsest.ffi.Container
 import app.palimpsest.ffi.ImportResult
 import app.palimpsest.ffi.Session
+import app.palimpsest.ffi.CoreException
 import app.palimpsest.ffi.MergeResult
 import app.palimpsest.ffi.backupOpens
 import app.palimpsest.ffi.restoreContainer
@@ -19,6 +20,9 @@ import java.io.OutputStream
  * Process-wide owner of the container (Rust core) and of the single open session.
  * [transfers] holds files on their way in or out; they are ciphertext only.
  */
+/** The sync document is a copy of another container, or not a container at all ([bytes] long). */
+class SyncFileProblem(val otherContainer: Boolean, val bytes: Long) : Exception()
+
 class VaultRepository(private val file: File, private val transfers: File) {
     companion object {
         /** Blocks a merge or a sync takes in without asking: 50 MiB. */
@@ -191,12 +195,21 @@ class VaultRepository(private val file: File, private val transfers: File) {
      * already holds exactly this container: every upload is one more copy for the provider.
      * Needs no open vault. Past [limit] blocks nothing is merged or written.
      */
-    fun syncWith(open: () -> InputStream?, write: () -> OutputStream?, limit: UInt = MERGE_LIMIT): MergeResult = synchronized(syncLock) {
+    fun syncWith(open: () -> InputStream?, write: () -> OutputStream?, limit: UInt = MERGE_LIMIT, fresh: Boolean = false): MergeResult = synchronized(syncLock) {
         val dir = scratch()
         try {
             val remote = File(dir, "remote.bin")
-            (open() ?: error("cannot read the sync file")).use { input -> remote.outputStream().use { input.copyTo(it) } }
-            val result = if (remote.length() > 0) mergeFile(remote, limit) else MergeResult.Merged(0u)
+            // A document just created through the picker is empty by definition: not read at all.
+            if (!fresh) (open() ?: error("cannot read the sync file")).use { input -> remote.outputStream().use { input.copyTo(it) } }
+            val result = if (remote.length() > 0) {
+                try {
+                    mergeFile(remote, limit)
+                } catch (e: CoreException.Invalid) {
+                    throw SyncFileProblem(otherContainer = e.message.orEmpty().contains("not a copy"), bytes = remote.length())
+                }
+            } else {
+                MergeResult.Merged(0u)
+            }
             if (result is MergeResult.TooLarge) return result
             val local = File(dir, "local.bin")
             container.backupTo(local.absolutePath)

@@ -281,6 +281,7 @@
     <string name="sync_stop">Отключить</string>
     <string name="sync_done">Синхронизировано</string>
     <string name="sync_stopped">Синхронизация выключена</string>
+    <string name="sync_not_container">Файл синхронизации — не контейнер (%1$s байт). Если вы только что его создали, выберите его снова через «Существующий файл», когда облако его выгрузит, или создайте новый.</string>
     <string name="sync_failed">Не удалось открыть файл синхронизации</string>
     <string name="sync_other_container">В файле синхронизации другой контейнер. На новом телефоне сначала восстановите копию из него.</string>
     <string name="md_export">Экспорт в Markdown</string>

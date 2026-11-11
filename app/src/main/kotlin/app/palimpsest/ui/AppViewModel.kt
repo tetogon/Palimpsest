@@ -22,6 +22,7 @@ import app.palimpsest.ffi.ChangePasswordResult
 import app.palimpsest.ffi.CoreException
 import app.palimpsest.ffi.ImportResult
 import app.palimpsest.ffi.MergeResult
+import app.palimpsest.SyncFileProblem
 import app.palimpsest.VaultRepository
 import app.palimpsest.ffi.EntryKind
 import app.palimpsest.ffi.EntrySummary
@@ -87,6 +88,8 @@ data class UiState(
     val screen: Screen = Screen.Unlock,
     val busy: Boolean = false,
     @StringRes val error: Int? = null,
+    /** Filled into [error] or [info] when the message has a placeholder. */
+    val messageArg: String? = null,
     /** Confirmation of a successful settings action. */
     @StringRes val info: Int? = null,
     /** Titles and previews only: full bodies leave the Rust core one entry at a time. */
@@ -722,12 +725,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      * This phone syncs with [uri] from now on. The app keeps its access to the document across
      * restarts; the choice is this phone's (another phone has its own link to the same file).
      */
-    fun startSync(uri: Uri) = work {
+    fun startSync(uri: Uri, fresh: Boolean) = work {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         resolver.takePersistableUriPermission(uri, flags)
         updateAppSettings(settings.values.value.copy(syncUri = uri.toString()))
         _ui.update { it.copy(syncName = displayName(uri)) }
-        syncNowWith(VaultRepository.MERGE_LIMIT)
+        syncNowWith(VaultRepository.MERGE_LIMIT, fresh)
     }
 
     fun stopSync() = work {
@@ -742,14 +745,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun syncNow() = work { syncNowWith(VaultRepository.MERGE_LIMIT) }
 
-    private fun syncNowWith(limit: UInt) {
+    private fun syncNowWith(limit: UInt, fresh: Boolean = false) {
         val uri = settings.values.value.syncUri?.let(Uri::parse) ?: return
-        val result = runCatching { sync(uri, limit) }
+        val result = runCatching { sync(uri, limit, fresh) }
         val merged = result.getOrNull()
+        val problem = result.exceptionOrNull() as? SyncFileProblem
         when {
             merged is MergeResult.TooLarge -> _ui.update { it.copy(largeMerge = LargeMerge(null, merged.blocks)) }
             result.isSuccess -> done(R.string.sync_done)
-            result.exceptionOrNull() is CoreException.Invalid -> fail(R.string.sync_other_container)
+            problem?.otherContainer == true -> fail(R.string.sync_other_container)
+            problem != null -> fail(R.string.sync_not_container, problem.bytes.toString())
             else -> fail(R.string.sync_failed)
         }
     }
@@ -771,8 +776,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         runCatching { sync(uri, VaultRepository.MERGE_LIMIT) }
     }
 
-    private fun sync(uri: Uri, limit: UInt): MergeResult {
-        val result = repo.syncWith({ resolver.openInputStream(uri) }, { resolver.openOutputStream(uri, "wt") }, limit)
+    private fun sync(uri: Uri, limit: UInt, fresh: Boolean = false): MergeResult {
+        val result = repo.syncWith({ resolver.openInputStream(uri) }, { resolver.openOutputStream(uri, "wt") }, limit, fresh)
         lastSync = SystemClock.elapsedRealtime()
         if (result is MergeResult.Merged && result.blocks > 0u) repo.session.value?.let { runCatching { refresh(it) } }
         return result
@@ -999,7 +1004,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         state.copy(screen = screen.copy(draft = change(screen.draft)))
     }
 
-    private fun fail(@StringRes message: Int) = _ui.update { it.copy(error = message, info = null) }
+    private fun fail(@StringRes message: Int, arg: String? = null) = _ui.update { it.copy(error = message, info = null, messageArg = arg) }
 
     /**
      * For every answer that tells whether a password opens a vault (wrong, taken, not found):
