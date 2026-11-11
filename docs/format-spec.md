@@ -498,8 +498,15 @@ The salt block and the initial chaff (§9). No vaults.
 4. No valid KEYWRAP → "Wrong password". There is no other possible answer.
 5. Derive `V`'s subkeys; classify all nonces by `K_meta_loc`, `K_blob_loc`, `K_pad_loc`.
 6. Decrypt the OP blocks, assemble the objects, compute the state.
-7. If the KEYWRAP used is revoked → "Wrong password", close the vault.
-8. Purge as in §8.2 (with chaff if anything was overwritten).
+7. If the KEYWRAP used is revoked → "Wrong password", close the vault. A revoked KEYWRAP is
+   overwritten with chaff.
+8. If the password opens KEYWRAPs of **several** vaults (two copies that each created a vault
+   with it, then merged, §7.3), the vault with the smallest `vault_id` is opened, so every
+   device lands in the same one. Every other vault is imported into it as in §11.7, and its
+   KEYWRAPs for this password are overwritten with chaff; its other blocks stay, unknown like
+   any other vault's. Repeating this after another merge copies nothing twice: only entries
+   newer than the local ones are taken.
+9. Purge as in §8.2 (with chaff if anything was overwritten).
 
 ### 11.4 Changing the password
 
