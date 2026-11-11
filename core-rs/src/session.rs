@@ -290,6 +290,8 @@ pub struct Session {
 pub(crate) struct Inner {
     /// None once closed.
     keys: Option<VaultKeys>,
+    /// The vault key itself, kept to re-read the vault after a merge ([Inner::reload]). None once closed.
+    v: Option<Key>,
     pub vault_id: Id,
     /// Heap index of this vault's KEYWRAP block.
     pub keywrap_index: u32,
@@ -353,7 +355,6 @@ impl Inner {
 
     pub fn load(heap: &Heap, cipher: &BlockCipher, vault_id: Id, keywrap_index: u32, v: Key, nonces: &[Nonce]) -> Result<Inner> {
         let keys = VaultKeys::derive(&v);
-        drop(v);
 
         let mut meta = Vec::new();
         let mut pad_blocks = BTreeSet::new();
@@ -392,6 +393,7 @@ impl Inner {
         let last_hlc = ops.values().map(Op::hlc).max().unwrap_or(0);
         let mut inner = Inner {
             keys: Some(keys),
+            v: Some(v),
             vault_id,
             keywrap_index,
             session_id: random_id(),
@@ -891,6 +893,38 @@ impl Inner {
         self.commit(heap, cipher, Op::Delete(op))
     }
 
+    /// Reads the vault again from the file, after a merge or a sync brought in blocks from
+    /// another copy (spec §7.3). The session goes on as the same session.
+    pub fn reload(&mut self, heap: &Heap, cipher: &BlockCipher) -> Result<()> {
+        let v = self.v.as_ref().ok_or(CoreError::Locked)?.duplicate();
+        let nonces = heap.read_nonces()?;
+        let mut fresh = Inner::load(heap, cipher, self.vault_id, self.keywrap_index, v, &nonces)?;
+        fresh.session_id = self.session_id;
+        fresh.last_hlc = fresh.last_hlc.max(self.last_hlc);
+        fresh.born = std::mem::take(&mut self.born);
+        fresh.born_blocks = std::mem::take(&mut self.born_blocks);
+        *self = fresh;
+        Ok(())
+    }
+
+    /// The document the container syncs with (spec §10, tag 0x42): nested TLV, 0x01 = transport
+    /// (1: a document the system file picker granted, its URI in 0x02).
+    pub fn sync_uri(&self) -> Option<String> {
+        let fields = crate::tlv::parse(self.setting(T_SYNC)?, 0)?;
+        let field = |tag: u8| fields.iter().find(|f| f.tag == tag).map(|f| f.value.as_slice());
+        (field(0x01)? == [1]).then(|| String::from_utf8(field(0x02)?.to_vec()).ok()).flatten()
+    }
+
+    pub fn set_sync_uri(&mut self, heap: &Heap, cipher: &BlockCipher, uri: Option<&str>) -> Result<()> {
+        let value = uri.map(|u| {
+            let mut w = crate::tlv::Writer::default();
+            w.put_u8(0x01, 1);
+            w.put(0x02, u.as_bytes());
+            w.into_bytes()
+        });
+        self.set_setting(heap, cipher, T_SYNC, value)
+    }
+
     fn setting(&self, tag: u8) -> Option<&Vec<u8>> {
         self.put_head(&SETTINGS_ID)?.unknown.iter().find(|f| f.tag == tag).map(|f| &f.value)
     }
@@ -947,6 +981,7 @@ impl Inner {
         let n = chaff::on_session_end();
         let result = if n > 0 { append_shuffled(heap, chaff_blocks(cipher, n)).map(|_| ()) } else { Ok(()) };
         self.keys = None; // VaultKeys zeroize on drop
+        self.v = None;
         self.ops.clear();
         self.op_blocks.clear();
         self.state = State::default();
@@ -1541,6 +1576,24 @@ impl Session {
 
     pub fn purge_mode(&self) -> Result<PurgeMode> {
         Ok(guard(&self.inner)?.purge_mode())
+    }
+
+    /// Re-reads the vault after [crate::Container::merge_from] added blocks to the file.
+    pub fn reload(&self) -> Result<()> {
+        let heap = guard(&self.shared.heap)?;
+        guard(&self.inner)?.reload(&heap, &self.shared.cipher)
+    }
+
+    /// The document this vault syncs the container with, if any (spec §7.3, §10).
+    pub fn sync_uri(&self) -> Result<Option<String>> {
+        let inner = guard(&self.inner)?;
+        inner.keys()?;
+        Ok(inner.sync_uri())
+    }
+
+    pub fn set_sync_uri(&self, uri: Option<String>) -> Result<()> {
+        let heap = guard(&self.shared.heap)?;
+        guard(&self.inner)?.set_sync_uri(&heap, &self.shared.cipher, uri.as_deref())
     }
 
     pub fn set_purge_mode(&self, mode: PurgeMode) -> Result<()> {

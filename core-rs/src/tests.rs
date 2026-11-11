@@ -909,6 +909,49 @@ fn two_vaults_under_one_password_after_a_merge_become_one() {
 }
 
 #[test]
+fn an_open_session_sees_merged_entries_after_reload() {
+    let f = Fixture::new();
+    let c = f.open();
+    create(&c, "pw").lock().unwrap();
+    let (pb, b) = device(&f, "b.bin");
+    let sb = unlock(&b, "pw").unwrap();
+    sb.save(None, EntryKind::Note, None, "from b".into(), "".into()).unwrap();
+    sb.lock().unwrap();
+
+    let s = unlock(&c, "pw").unwrap();
+    s.save(None, EntryKind::Note, None, "here".into(), "".into()).unwrap();
+    c.merge_from(pb).unwrap();
+    assert_eq!(titles(&s), ["here"], "not before the reload");
+    s.reload().unwrap();
+    let mut t = titles(&s);
+    t.sort();
+    assert_eq!(t, ["from b", "here"]);
+    // The session goes on: it can still write, and everything survives a reopen.
+    s.save(None, EntryKind::Note, None, "after".into(), "".into()).unwrap();
+    s.lock().unwrap();
+    assert!(s.reload().is_err(), "a locked session cannot reload");
+    let mut t = titles(&unlock(&c, "pw").unwrap());
+    t.sort();
+    assert_eq!(t, ["after", "from b", "here"]);
+}
+
+#[test]
+fn sync_target_lives_in_the_vault() {
+    let f = Fixture::new();
+    let c = f.open();
+    two_vaults(&c);
+    let d = unlock(&c, "D").unwrap();
+    assert_eq!(d.sync_uri().unwrap(), None);
+    d.set_sync_uri(Some("content://drive/doc/1".into())).unwrap();
+    d.lock().unwrap();
+    assert_eq!(unlock(&c, "D").unwrap().sync_uri().unwrap().as_deref(), Some("content://drive/doc/1"));
+    assert_eq!(unlock(&c, "R").unwrap().sync_uri().unwrap(), None, "another vault knows nothing of it");
+    let d = unlock(&c, "D").unwrap();
+    d.set_sync_uri(None).unwrap();
+    assert_eq!(d.sync_uri().unwrap(), None);
+}
+
+#[test]
 fn merge_refuses_another_container() {
     let f = Fixture::new();
     let c = f.open();

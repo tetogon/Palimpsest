@@ -57,6 +57,8 @@ pub const SETTINGS_ID: Id = [0; 16];
 
 /// settings TLV: purge_mode, absent = immediate, [1] = manual (spec §8.2, §10).
 pub const T_PURGE_MODE: u8 = 0x41;
+/// Where the container syncs to (spec §7.3, §10): nested TLV, see session::SyncTarget.
+pub const T_SYNC: u8 = 0x42;
 
 /// settings TLV: locators of the vault to shred on next unlock (spec §10.1).
 pub const T_WIPE_TARGET: u8 = 0x45;
