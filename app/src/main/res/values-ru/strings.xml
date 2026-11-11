@@ -282,6 +282,15 @@
     <string name="sync_done">Синхронизировано</string>
     <string name="sync_stopped">Синхронизация выключена</string>
     <string name="sync_not_container">Файл синхронизации — не контейнер (%1$s байт). Если вы только что его создали, выберите его снова через «Существующий файл», когда облако его выгрузит, или создайте новый.</string>
+    <string name="sync_file_unnamed">файл</string>
+    <string name="sync_join_title">В файле синхронизации другой контейнер</string>
+    <string name="sync_join_text">Сливать можно копии одного контейнера, а этот телефон начал свой. Чтобы синхронизироваться, он должен стать копией файла синхронизации: всё на этом телефоне заменится им, и нужно ввести пароль любого хранилища в нём. Хранилища, которые есть только на этом телефоне, пропадут: сначала экспортируйте их, а потом импортируйте.</string>
+    <string name="sync_join_button">Заменить файлом синхронизации</string>
+    <string name="support_title">Поддержать</string>
+    <string name="support_star">Звезда на GitHub</string>
+    <string name="support_star_hint">Бесплатно, и так Palimpsest проще найти другим</string>
+    <string name="support_issues">Сообщить о проблеме или идее</string>
+    <string name="support_issues_hint">Issues на GitHub; откроется в браузере</string>
     <string name="sync_failed">Не удалось открыть файл синхронизации</string>
     <string name="sync_other_container">В файле синхронизации другой контейнер. На новом телефоне сначала восстановите копию из него.</string>
     <string name="md_export">Экспорт в Markdown</string>

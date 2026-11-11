@@ -117,6 +117,8 @@ data class UiState(
     val syncName: String? = null,
     /** A merge or a sync that would add more than the limit, waiting for the user's yes. */
     val largeMerge: LargeMerge? = null,
+    /** The sync document holds another container; offer to restore this phone from it. */
+    val joinSync: Boolean = false,
     /** Blocks of replaced revisions waiting for "erase now" (manual mode). */
     val pendingPurgeBlocks: Int = 0,
     val appSettings: AppSettings.Values = AppSettings.Values(),
@@ -728,8 +730,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun startSync(uri: Uri, fresh: Boolean) = work {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         resolver.takePersistableUriPermission(uri, flags)
-        updateAppSettings(settings.values.value.copy(syncUri = uri.toString()))
-        _ui.update { it.copy(syncName = displayName(uri)) }
+        val name = displayName(uri)
+        updateAppSettings(settings.values.value.copy(syncUri = uri.toString(), syncName = name))
+        _ui.update { it.copy(syncName = name) }
         syncNowWith(VaultRepository.MERGE_LIMIT, fresh)
     }
 
@@ -738,7 +741,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             runCatching { resolver.releasePersistableUriPermission(Uri.parse(u), flags) }
         }
-        updateAppSettings(settings.values.value.copy(syncUri = null))
+        updateAppSettings(settings.values.value.copy(syncUri = null, syncName = null))
         _ui.update { it.copy(syncName = null) }
         done(R.string.sync_stopped)
     }
@@ -753,7 +756,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         when {
             merged is MergeResult.TooLarge -> _ui.update { it.copy(largeMerge = LargeMerge(null, merged.blocks)) }
             result.isSuccess -> done(R.string.sync_done)
-            problem?.otherContainer == true -> fail(R.string.sync_other_container)
+            problem?.otherContainer == true -> _ui.update { it.copy(joinSync = true) }
             problem != null -> fail(R.string.sync_not_container, problem.bytes.toString())
             else -> fail(R.string.sync_failed)
         }
@@ -783,12 +786,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return result
     }
 
-    private fun syncName(): String? = settings.values.value.syncUri?.let { displayName(Uri.parse(it)) }
+    private fun syncName(): String? = settings.values.value.let { v -> v.syncUri?.let { v.syncName ?: displayName(Uri.parse(it)) } }
+
+    /** The sync document holds another container: this phone can become a copy of it (a restore). */
+    fun dismissJoinSync() = _ui.update { it.copy(joinSync = false) }
     private fun displayName(uri: Uri): String = runCatching {
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null
         }
-    }.getOrNull() ?: uri.lastPathSegment.orEmpty()
+    }.getOrNull() ?: getApplication<Application>().getString(R.string.sync_file_unnamed)
 
     /** This vault as Markdown files and attachments in a ZIP, unencrypted, straight into [uri]. */
     fun exportMarkdown(uri: Uri) = work {

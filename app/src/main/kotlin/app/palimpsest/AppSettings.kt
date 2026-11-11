@@ -40,6 +40,8 @@ class AppSettings(context: Context) {
          * system keeps the grant outside the vaults anyway, and sync needs no password.
          */
         val syncUri: String? = null,
+        /** The document's name as the picker showed it, so the row never falls back to a raw URI. */
+        val syncName: String? = null,
     )
 
     private val prefs = context.getSharedPreferences("app", Context.MODE_PRIVATE)
@@ -58,6 +60,7 @@ class AppSettings(context: Context) {
             swipeSections = prefs.getBoolean(SWIPE, true),
             diaryCalendar = prefs.getBoolean(DIARY_CALENDAR, false),
             syncUri = prefs.getString(SYNC_URI, null),
+            syncName = prefs.getString(SYNC_NAME, null),
         ),
     )
     val values: StateFlow<Values> = _values
@@ -76,6 +79,7 @@ class AppSettings(context: Context) {
             .putBoolean(SWIPE, v.swipeSections)
             .putBoolean(DIARY_CALENDAR, v.diaryCalendar)
             .putString(SYNC_URI, v.syncUri)
+            .putString(SYNC_NAME, v.syncName)
             .apply()
         _values.value = v
     }
@@ -96,5 +100,6 @@ class AppSettings(context: Context) {
         private const val SWIPE = "swipe_sections"
         private const val DIARY_CALENDAR = "diary_calendar"
         private const val SYNC_URI = "sync_uri"
+        private const val SYNC_NAME = "sync_name"
     }
 }

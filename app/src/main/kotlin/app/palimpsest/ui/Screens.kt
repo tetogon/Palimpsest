@@ -1,6 +1,7 @@
 package app.palimpsest.ui
 
 import android.graphics.Typeface
+import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,7 +32,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Create
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
@@ -288,6 +291,8 @@ private fun CreateVaultScreen(
 
 // ---- Settings: app first, this vault below -------------------------------------------------
 
+private const val REPO_URL = "https://github.com/tetogon/Palimpsest"
+
 private enum class SettingsDialog { IDLE, BACKGROUND, CHANGE_PASSWORD, WIPE, RECLAIM, DELETE_VAULT, RESTORE, RESTORE_PASSWORD, IMPORT, EXPORT, MERGE, SYNC, MD_EXPORT }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -443,11 +448,38 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
                     }
                 }
             }
+
+            // The app has no internet access: a link opens in the browser.
+            GroupTitle(R.string.support_title)
+            Group {
+                val open = { url: String ->
+                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                    Unit
+                }
+                ActionRow(Icons.Filled.Star, R.string.support_star, R.string.support_star_hint) { open(REPO_URL) }
+                ActionRow(Icons.Filled.Info, R.string.support_issues, R.string.support_issues_hint) { open("$REPO_URL/issues") }
+            }
             Spacer(Modifier.height(32.dp))
         }
     }
 
     val close = { dialog = null }
+    if (ui.joinSync) {
+        AlertDialog(
+            onDismissRequest = vm::dismissJoinSync,
+            icon = { Icon(Icons.Filled.Share, null) },
+            title = { Text(stringResource(R.string.sync_join_title)) },
+            text = { Text(stringResource(R.string.sync_join_text), style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.dismissJoinSync()
+                    restoreUri = values.syncUri?.let(Uri::parse)
+                    if (restoreUri != null) dialog = SettingsDialog.RESTORE_PASSWORD
+                }) { Text(stringResource(R.string.sync_join_button), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = vm::dismissJoinSync) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
     ui.largeMerge?.let { large ->
         AlertDialog(
             onDismissRequest = vm::dismissLargeMerge,
