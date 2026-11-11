@@ -1,3 +1,7 @@
-Tables (GitHub syntax, with column alignment) and a ▦ button that inserts one.
-Code blocks are highlighted by language: ```kotlin, ```python, ```rust and more.
-Chaff comes in rarer, larger bursts: a hidden vault is harder to spot from two copies of the file, at about 23 MB a year.
+Tables edited as a grid (▦), with rows and columns on the bar.
+Code highlighted by language (```kotlin, ```python…).
+Lock after leaving the app: up to 24 h or never.
+Drafts saved on leaving the app and every 2 min.
+Restoring a backup asks for one of its passwords.
+A changed password stays revoked when an old copy is merged back.
+Rarer, larger chaff bursts (~23 MB a year). The threat model now says one copy plus the decoy password works like two copies.
