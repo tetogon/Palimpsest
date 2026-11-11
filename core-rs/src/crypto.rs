@@ -61,8 +61,15 @@ pub fn kdf(master: &Key, subkey_id: u64, context: &[u8; 8]) -> Key {
 
 /// libsodium crypto_generichash with a 32-byte key and 16-byte output.
 pub fn keyed_hash16(key: &Key, message: &[u8]) -> [u8; 16] {
+    keyed_hash16_of(key, &[message])
+}
+
+/// [keyed_hash16] of the concatenation of `parts`, without copying them together.
+pub fn keyed_hash16_of(key: &Key, parts: &[&[u8]]) -> [u8; 16] {
     let mut mac = <Blake2bMac<U16> as KeyInit>::new_from_slice(key.bytes()).expect("valid BLAKE2b key");
-    Update::update(&mut mac, message);
+    for p in parts {
+        Update::update(&mut mac, p);
+    }
     let out = Mac::finalize(mac).into_bytes();
     let mut r = [0u8; 16];
     r.copy_from_slice(&out);

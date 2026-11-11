@@ -87,8 +87,13 @@ impl Frame {
         })
     }
 
+    /// How many frames [Frame::split] cuts `len` bytes into.
+    pub fn part_count(len: usize) -> u32 {
+        len.div_ceil(FRAME_CAP).max(1) as u32
+    }
+
     pub fn split(kind: Kind, object_id: Id, data: &[u8]) -> Vec<Frame> {
-        let count = data.len().div_ceil(FRAME_CAP).max(1);
+        let count = Frame::part_count(data.len()) as usize;
         assert!(count as u32 <= kind.max_parts(), "object too large: {count} parts");
         (0..count)
             .map(|i| {

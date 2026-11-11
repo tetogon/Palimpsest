@@ -8,7 +8,7 @@ use crate::format::*;
 use crate::frame::{Assembler, Frame, Kind};
 use crate::heap::Heap;
 use crate::keys::{locator, BlockCipher, VaultKeys};
-use crate::op::{DeleteOp, Op, PutOp};
+use crate::op::{DeleteOp, Op, PutOp, RevokeOp};
 use crate::state::State;
 use crate::tlv::Field;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -309,6 +309,8 @@ pub(crate) struct Inner {
     born_blocks: HashSet<u32>,
     /// Part nonces per BLOB seed, derived once.
     nonce_cache: HashMap<Id, Vec<Nonce>>,
+    /// KEYWRAPs this vault's log revokes (spec §11.4); their REVOKE ops are never purged.
+    pub revoked: HashSet<Id>,
 }
 
 /// When replaced revisions from earlier sessions are physically erased (spec §8.2).
@@ -377,10 +379,13 @@ impl Inner {
 
         let mut ops = HashMap::new();
         let mut op_blocks = HashMap::new();
+        let mut revoked = HashSet::new();
         for obj in assembler.complete() {
             if let Some(op) = Op::decode(obj.object_id, &obj.data) {
                 op_blocks.insert(op.op_id(), obj.blocks);
                 ops.insert(op.op_id(), op);
+            } else if let Some(r) = RevokeOp::decode(obj.object_id, &obj.data) {
+                revoked.insert(r.keywrap_id);
             }
         }
 
@@ -399,6 +404,7 @@ impl Inner {
             blob_blocks,
             born_blocks: HashSet::new(),
             nonce_cache: HashMap::new(),
+            revoked,
         };
         inner.recompute(heap, cipher)?;
         Ok(inner)
@@ -457,6 +463,24 @@ impl Inner {
             self.born_blocks.insert(at);
         }
         self.recompute(heap, cipher)
+    }
+
+    /// Appends `extra` (ready-sealed blocks, the new KEYWRAP) in one batch with a
+    /// REVOKE_KEYWRAP of `keywrap_id` and a portion of chaff (spec §11.4). Returns where
+    /// `extra` landed.
+    pub fn append_with_revoke(&mut self, heap: &Heap, cipher: &BlockCipher, keywrap_id: Id, extra: Vec<Vec<u8>>) -> Result<Vec<u32>> {
+        let op = RevokeOp { op_id: random_id(), hlc: self.next_hlc(), session_id: self.session_id, keywrap_id };
+        let keys = self.keys()?;
+        let n = extra.len();
+        let mut batch = extra;
+        for f in Frame::split(Kind::Op, op.op_id, &op.encode()) {
+            batch.push(cipher.seal(&keys.enc, &locator::nonce(&keys.meta_loc), &f.encode()));
+        }
+        let written = batch.len();
+        batch.extend(chaff_blocks(cipher, chaff::on_commit(written)));
+        let positions = append_shuffled(heap, batch)?;
+        self.revoked.insert(keywrap_id);
+        Ok(positions[..n].to_vec())
     }
 
     fn part_nonces(&mut self, seed: &Id, parts: u32) -> Result<Vec<Nonce>> {
@@ -980,9 +1004,9 @@ impl Inner {
                 }
                 let Some(mut r) = AttachmentRef::decode(&f.value) else { continue };
                 let old = r.seed;
-                r.seed = self.copy_blob(cipher, src, src_heap, src_cipher, &old, r.parts, &mut blobs)?;
-                if let Some((tseed, parts)) = r.thumb {
-                    r.thumb = Some((self.copy_blob(cipher, src, src_heap, src_cipher, &tseed, parts, &mut blobs)?, parts));
+                (r.seed, r.parts) = self.copy_blob(cipher, src, src_heap, src_cipher, &old, &mut blobs)?;
+                if let Some((tseed, _)) = r.thumb {
+                    r.thumb = Some(self.copy_blob(cipher, src, src_heap, src_cipher, &tseed, &mut blobs)?);
                 }
                 // Photos placed in the text refer to the attachment by id.
                 body = body.replace(&format!("att:{}", hex(&old)), &format!("att:{}", hex(&r.seed)));
@@ -1006,9 +1030,9 @@ impl Inner {
     }
 
     /// Re-encrypts the BLOB `seed` of `src` for this vault and returns its seed here. The new
-    /// seed is keyed by this vault, so the same attachment copied again is not stored twice,
-    /// and two vaults never share seeds (or locators).
-    #[allow(clippy::too_many_arguments)]
+    /// seed is a hash of the content keyed by this vault (spec §11.7): the same attachment
+    /// copied again is not stored twice, two vaults never share seeds (or locators), and two
+    /// different contents never get one seed, whatever a crafted source file claims (§6.4).
     fn copy_blob(
         &mut self,
         cipher: &BlockCipher,
@@ -1016,17 +1040,17 @@ impl Inner {
         src_heap: &Heap,
         src_cipher: &BlockCipher,
         seed: &Id,
-        parts: u32,
         out: &mut Vec<(Nonce, Vec<u8>)>,
-    ) -> Result<Id> {
-        let new_seed = crypto::keyed_hash16(&self.keys()?.blob_nonce, &[b"plmp1-import".as_slice(), seed].concat());
+    ) -> Result<(Id, u32)> {
+        let data = src.read_blob(src_heap, src_cipher, seed)?;
+        let new_seed = crypto::keyed_hash16_of(&self.keys()?.blob_nonce, &[b"plmp1-import-content".as_slice(), data.as_slice()]);
+        let parts = Frame::part_count(data.len());
         let nonces = self.part_nonces(&new_seed, parts)?;
         let present = nonces.iter().all(|n| self.blob_blocks.contains_key(n) || out.iter().any(|(o, _)| o == n));
         if !present {
-            let data = src.read_blob(src_heap, src_cipher, seed)?;
             out.extend(self.seal_blob(cipher, new_seed, &data)?);
         }
-        Ok(new_seed)
+        Ok((new_seed, parts))
     }
     fn heads(&self) -> Vec<&PutOp> {
         let mut list: Vec<&PutOp> = self

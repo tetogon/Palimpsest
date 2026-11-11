@@ -649,13 +649,236 @@ fn backup_restores_every_vault_and_rejects_other_files() {
     s.lock().unwrap();
     drop(c);
 
+    let here: String = f.path.to_string_lossy().into();
     let junk = path_of(&f, "junk.bin");
     fs::write(&junk, [0u8; 100]).unwrap();
-    assert!(restore_container(f.path.to_string_lossy().into(), junk).is_err());
-    restore_container(f.path.to_string_lossy().into(), backup).unwrap();
+    assert!(restore_container(here.clone(), junk, "R".into()).is_err());
+    // The right shape is not enough: random bytes, or a password that opens nothing, change nothing.
+    let noise = path_of(&f, "noise.bin");
+    fs::write(&noise, crate::crypto::random_bytes(8 * BLOCK_SIZE)).unwrap();
+    let before = fs::read(&f.path).unwrap();
+    assert!(!restore_container(here.clone(), noise, "R".into()).unwrap());
+    assert!(!restore_container(here.clone(), backup.clone(), "nope".into()).unwrap());
+    assert_eq!(fs::read(&f.path).unwrap(), before);
+    // Any vault's password will do.
+    assert!(restore_container(here, backup, "D".into()).unwrap());
     let c = f.open();
     assert_eq!(titles(&unlock(&c, "R").unwrap()), ["secret"]);
     assert_eq!(titles(&unlock(&c, "D").unwrap()), ["groceries"]);
+}
+
+#[test]
+fn revoked_password_stays_revoked_when_its_block_comes_back() {
+    let f = Fixture::new();
+    let c = f.open();
+    two_vaults(&c);
+    // The old KEYWRAP's bytes, as an old copy of the file or a merge would bring them back.
+    let old: Vec<Vec<u8>> = {
+        let salt = Heap::new(&f.path).read_salt().unwrap();
+        let pk = PasswordKeys::derive("R", &salt).unwrap();
+        blocks_of(&f.path).into_iter().filter(|b| locator::matches(&pk.loc, &b[..NONCE_LEN])).collect()
+    };
+    assert_eq!(old.len(), 1);
+    let s = unlock(&c, "R").unwrap();
+    assert_eq!(c.change_password(s.clone(), "R".into(), "R2".into()).unwrap(), ChangePasswordResult::Changed);
+    s.lock().unwrap();
+    drop(c);
+
+    Heap::new(&f.path).append(&old).unwrap();
+    let c = f.open();
+    let resurrected = c.block_count().unwrap() - 1;
+    assert!(unlock(&c, "R").is_none(), "a revoked KEYWRAP must not open the vault");
+    // ...and it was erased on the way.
+    assert_ne!(Heap::new(&f.path).read_block(resurrected).unwrap(), old[0]);
+    assert_eq!(titles(&unlock(&c, "R2").unwrap()), ["secret"]);
+    // Changing back to the old password works: the new KEYWRAP is not the revoked one.
+    let s = unlock(&c, "R2").unwrap();
+    assert_eq!(c.change_password(s.clone(), "R2".into(), "R".into()).unwrap(), ChangePasswordResult::Changed);
+    s.lock().unwrap();
+    assert_eq!(titles(&unlock(&c, "R").unwrap()), ["secret"]);
+}
+
+#[test]
+fn imported_attachments_get_seeds_from_their_content() {
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    let a = s.save(None, EntryKind::Note, None, "a".into(), "".into()).unwrap();
+    s.add_attachment(a.clone(), vec![1; 5000], "image/jpeg".into(), None, 0, 1, 1).unwrap();
+    let b = s.save(None, EntryKind::Note, None, "b".into(), "".into()).unwrap();
+    s.add_attachment(b.clone(), vec![2; 9000], "image/jpeg".into(), None, 0, 1, 1).unwrap();
+    // The same content twice is stored once.
+    let d = s.save(None, EntryKind::Note, None, "d".into(), "".into()).unwrap();
+    s.add_attachment(d.clone(), vec![1; 5000], "image/jpeg".into(), None, 0, 1, 1).unwrap();
+    let exported = path_of(&f, "export.bin");
+    c.export_vault(s.clone(), exported.clone(), "x".into()).unwrap();
+    s.lock().unwrap();
+
+    let x = Container::open_or_create(exported).unwrap();
+    let xs = unlock(&x, "x").unwrap();
+    let att = |id: &str| xs.entry(id.into()).unwrap().unwrap().attachments.remove(0);
+    let (ia, ib, id) = (att(&a), att(&b), att(&d));
+    assert_ne!(ia.attachment_id, ib.attachment_id, "two contents, two seeds");
+    assert_eq!(ia.attachment_id, id.attachment_id, "one content, one seed");
+    assert_eq!(xs.attachment_data(ia.attachment_id).unwrap(), vec![1; 5000]);
+    assert_eq!(xs.attachment_data(ib.attachment_id).unwrap(), vec![2; 9000]);
+}
+
+// ---- Convergence (spec §12 T7) -----------------------------------------------------------
+
+/// Everything a vault shows, by entry id: title, body, a concurrent version if any.
+fn snapshot(c: &Container, pw: &str) -> Vec<(String, String, String, Option<String>)> {
+    let s = unlock(c, pw).expect("vault opens");
+    let mut out: Vec<_> = s
+        .entries()
+        .unwrap()
+        .into_iter()
+        .map(|e| {
+            let d = s.entry(e.entry_id.clone()).unwrap().unwrap();
+            (e.entry_id, d.title, d.body, d.conflict_body)
+        })
+        .collect();
+    s.lock().unwrap();
+    out.sort();
+    out
+}
+
+/// A device: its own copy of the file.
+fn device(f: &Fixture, name: &str) -> (String, Arc<Container>) {
+    let p = path_of(f, name);
+    fs::copy(&f.path, &p).unwrap();
+    let c = Container::open_or_create(p.clone()).unwrap();
+    (p, c)
+}
+
+#[test]
+fn merges_in_any_order_give_the_same_state() {
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    let shared = s.save(None, EntryKind::Note, None, "shared".into(), "v0".into()).unwrap();
+    let doomed = s.save(None, EntryKind::Note, None, "doomed".into(), "".into()).unwrap();
+    s.lock().unwrap();
+    drop(c);
+
+    // Three devices edit their copies apart: the same entry concurrently, a delete, new ones.
+    let (pa, a) = device(&f, "a.bin");
+    let (pb, b) = device(&f, "b.bin");
+    let (pc, cc) = device(&f, "c.bin");
+    let sa = unlock(&a, "pw").unwrap();
+    sa.save(Some(shared.clone()), EntryKind::Note, None, "shared".into(), "from a".into()).unwrap();
+    sa.save(None, EntryKind::Note, None, "only a".into(), "".into()).unwrap();
+    sa.lock().unwrap();
+    let sb = unlock(&b, "pw").unwrap();
+    sb.save(Some(shared.clone()), EntryKind::Note, None, "shared".into(), "from b".into()).unwrap();
+    sb.delete(doomed.clone()).unwrap();
+    sb.lock().unwrap();
+    let sc = unlock(&cc, "pw").unwrap();
+    sc.save(None, EntryKind::Diary, None, "only c".into(), "".into()).unwrap();
+    sc.lock().unwrap();
+
+    // Every device takes what the other two had, each in its own order.
+    let (a0, b0, c0) = (path_of(&f, "a0.bin"), path_of(&f, "b0.bin"), path_of(&f, "c0.bin"));
+    for (from, to) in [(&pa, &a0), (&pb, &b0), (&pc, &c0)] {
+        fs::copy(from, to).unwrap();
+    }
+    for (dev, first, second) in [(&a, &b0, &c0), (&b, &c0, &a0), (&cc, &a0, &b0)] {
+        dev.merge_from(first.clone()).unwrap();
+        dev.merge_from(second.clone()).unwrap();
+    }
+    let state = snapshot(&a, "pw");
+    assert_eq!(snapshot(&b, "pw"), state);
+    assert_eq!(snapshot(&cc, "pw"), state);
+
+    let titles: Vec<&str> = state.iter().map(|e| e.1.as_str()).collect();
+    assert!(!titles.contains(&"doomed"), "the delete holds");
+    for t in ["only a", "only c", "shared"] {
+        assert!(titles.contains(&t), "{t} is there");
+    }
+    // Two concurrent edits: one is shown, the other offered as a conflict.
+    let s = state.iter().find(|e| e.0 == shared).unwrap();
+    let mut both = [s.2.clone(), s.3.clone().expect("a conflict")];
+    both.sort();
+    assert_eq!(both, ["from a".to_string(), "from b".to_string()]);
+
+    // The same copy again adds nothing; B's file as it is now (with chaff and PADs from the
+    // sessions above) adds blocks but changes nothing visible.
+    assert_eq!(a.merge_from(b0).unwrap(), 0);
+    a.merge_from(pb.clone()).unwrap();
+    assert_eq!(snapshot(&a, "pw"), state);
+}
+
+#[test]
+fn a_purged_revision_brought_back_by_a_merge_stays_dead() {
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    let id = s.save(None, EntryKind::Note, None, "note".into(), "old text".into()).unwrap();
+    s.lock().unwrap();
+    let old_copy = path_of(&f, "old.bin");
+    c.backup_to(old_copy.clone()).unwrap();
+    let s = unlock(&c, "pw").unwrap();
+    s.save(Some(id.clone()), EntryKind::Note, None, "note".into(), "new text".into()).unwrap(); // purges "old text"
+    s.lock().unwrap();
+
+    assert!(c.merge_from(old_copy.clone()).unwrap() > 0, "the old revision's blocks come back");
+    let state = snapshot(&c, "pw");
+    assert_eq!(state.len(), 1);
+    assert_eq!((state[0].2.as_str(), state[0].3.as_deref()), ("new text", None));
+    // Unlocking erased them again: the old text is nowhere in the file in clear or decryptable.
+    let s = unlock(&c, "pw").unwrap();
+    assert_eq!(s.pending_purge_blocks().unwrap(), 0);
+    s.lock().unwrap();
+}
+
+#[test]
+fn an_edit_resolves_a_conflict_for_good() {
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    let id = s.save(None, EntryKind::Note, None, "n".into(), "base".into()).unwrap();
+    s.lock().unwrap();
+    let (pb, b) = device(&f, "b.bin");
+    let sb = unlock(&b, "pw").unwrap();
+    sb.save(Some(id.clone()), EntryKind::Note, None, "n".into(), "there".into()).unwrap();
+    sb.lock().unwrap();
+    let s = unlock(&c, "pw").unwrap();
+    s.save(Some(id.clone()), EntryKind::Note, None, "n".into(), "here".into()).unwrap();
+    s.lock().unwrap();
+
+    c.merge_from(pb.clone()).unwrap();
+    assert!(snapshot(&c, "pw")[0].3.is_some(), "a conflict after the merge");
+    let s = unlock(&c, "pw").unwrap();
+    s.save(Some(id.clone()), EntryKind::Note, None, "n".into(), "here and there".into()).unwrap();
+    s.lock().unwrap();
+    c.merge_from(pb).unwrap();
+    let state = snapshot(&c, "pw");
+    assert_eq!((state[0].2.as_str(), state[0].3.as_deref()), ("here and there", None));
+}
+
+#[test]
+fn a_merge_does_not_give_an_old_password_back() {
+    let f = Fixture::new();
+    let c = f.open();
+    two_vaults(&c);
+    let old_copy = path_of(&f, "old.bin");
+    c.backup_to(old_copy.clone()).unwrap();
+    let s = unlock(&c, "R").unwrap();
+    c.change_password(s.clone(), "R".into(), "R2".into()).unwrap();
+    s.lock().unwrap();
+    assert!(c.merge_from(old_copy).unwrap() > 0);
+    assert!(unlock(&c, "R").is_none());
+    assert_eq!(titles(&unlock(&c, "R2").unwrap()), ["secret"]);
+    assert_eq!(titles(&unlock(&c, "D").unwrap()), ["groceries"]);
+}
+
+#[test]
+fn merge_refuses_another_container() {
+    let f = Fixture::new();
+    let c = f.open();
+    let g = Fixture::new();
+    g.open();
+    assert!(c.merge_from(g.path.to_string_lossy().into()).is_err());
 }
 
 // ---- Indistinguishability (single snapshot) --------------------------------------------

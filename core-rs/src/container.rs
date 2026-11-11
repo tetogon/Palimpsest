@@ -67,16 +67,32 @@ pub enum ImportResult {
     Merged { entries: u32 },
 }
 
-/// Replaces the container file at `path` with the backup at `source` (spec §11.7). No
-/// Container for `path` may be in use. Only the shape is checked: nothing in a container can
-/// be read without a password.
+/// Replaces the container file at `path` with the backup at `source` (spec §11.7), but only
+/// if `password` opens a vault in the backup: any file of the right shape looks like a
+/// container, and replacing cannot be undone. False, and nothing touched, otherwise. No
+/// Container for `path` may be in use.
 #[uniffi::export]
-pub fn restore_container(path: String, source: String) -> Result<()> {
+pub fn restore_container(path: String, source: String, password: String) -> Result<bool> {
+    if !backup_opens(source.clone(), password)? {
+        return Ok(false);
+    }
+    Heap::new(path).replace_with(std::path::Path::new(&source))?;
+    Ok(true)
+}
+
+/// Whether `password` opens a vault in the container file `source`, for checking a backup
+/// before anything is locked or replaced. Errors with Invalid if the file cannot be a container.
+#[uniffi::export]
+pub fn backup_opens(source: String, password: String) -> Result<bool> {
+    let password = Zeroizing::new(password);
     let len = std::fs::metadata(&source)?.len();
     if len < 2 * BLOCK_SIZE as u64 || len % BLOCK_SIZE as u64 != 0 {
         return Err(CoreError::Invalid("not a container".into()));
     }
-    Ok(Heap::new(path).replace_with(std::path::Path::new(&source))?)
+    let src = Heap::new(&source);
+    let salt = src.read_salt()?;
+    let pk = PasswordKeys::derive(&password, &salt)?;
+    Ok(find_keywrap(&src, &BlockCipher::new(&salt), &pk, &src.read_nonces()?)?.is_some())
 }
 
 /// Immutable per-container data plus the file, behind one lock so a session and the
@@ -94,6 +110,8 @@ pub struct Container {
 
 struct Keywrap {
     block_index: u32,
+    /// The frame's object_id, which REVOKE_KEYWRAP names (spec §6.1).
+    keywrap_id: Id,
     vault_id: Id,
     v: Key,
 }
@@ -133,6 +151,13 @@ fn keywrap_block(cipher: &BlockCipher, pk: &PasswordKeys, vault_id: &Id, v: &Key
 }
 
 fn find_keywrap(heap: &Heap, cipher: &BlockCipher, pk: &PasswordKeys, nonces: &[Nonce]) -> Result<Option<Keywrap>> {
+    Ok(find_keywraps(heap, cipher, pk, nonces, true)?.into_iter().next())
+}
+
+/// Every KEYWRAP the password opens; with `first`, stop at the first one. Normally there is
+/// one, but a merge or a restored block can bring back one that a password change revoked.
+fn find_keywraps(heap: &Heap, cipher: &BlockCipher, pk: &PasswordKeys, nonces: &[Nonce], first: bool) -> Result<Vec<Keywrap>> {
+    let mut out = Vec::new();
     for (i, n) in nonces.iter().enumerate() {
         if !locator::matches(&pk.loc, n) {
             continue;
@@ -142,13 +167,17 @@ fn find_keywrap(heap: &Heap, cipher: &BlockCipher, pk: &PasswordKeys, nonces: &[
         if frame.kind != Kind::Keywrap || frame.data.len() != 16 + KEY_LEN + 8 {
             continue;
         }
-        return Ok(Some(Keywrap {
+        out.push(Keywrap {
             block_index: i as u32,
+            keywrap_id: frame.object_id,
             vault_id: frame.data[..16].try_into().expect("16 bytes"),
             v: Key::from_bytes(&frame.data[16..16 + KEY_LEN]),
-        }));
+        });
+        if first {
+            break;
+        }
     }
-    Ok(None)
+    Ok(out)
 }
 
 /// Overwrites in place, with fresh random bytes indistinguishable from chaff, every block
@@ -213,8 +242,18 @@ impl Container {
         let heap = guard(&self.shared.heap)?;
         let cipher = &self.shared.cipher;
         let nonces = heap.read_nonces()?;
-        let Some(kw) = find_keywrap(&heap, cipher, &pk, &nonces)? else { return Ok(None) };
-        let mut inner = Inner::load(&heap, cipher, kw.vault_id, kw.block_index, kw.v, &nonces)?;
+        let found = find_keywraps(&heap, cipher, &pk, &nonces, false)?;
+        let Some(first) = found.first() else { return Ok(None) };
+        let mut inner = Inner::load(&heap, cipher, first.vault_id, first.block_index, first.v.duplicate(), &nonces)?;
+        // A revoked KEYWRAP brought back by a merge or an old block (spec §11.3 step 7) is
+        // erased; the password opens the vault only through one that is not revoked.
+        let (revoked, live): (Vec<&Keywrap>, Vec<&Keywrap>) =
+            found.iter().filter(|k| k.vault_id == inner.vault_id).partition(|k| inner.revoked.contains(&k.keywrap_id));
+        if !revoked.is_empty() {
+            heap.overwrite(&revoked.iter().map(|k| (k.block_index, cipher.chaff())).collect::<Vec<_>>())?;
+        }
+        let Some(kw) = live.first() else { return Ok(None) };
+        inner.keywrap_index = kw.block_index;
         if let Some(target) = inner.wipe_target() {
             shred(&heap, cipher, &target.iter().collect::<Vec<_>>(), &[])?;
             inner.set_wipe_target(&heap, cipher, None)?;
@@ -309,7 +348,8 @@ impl Container {
         Ok(result)
     }
 
-    /// New KEYWRAP with the same V; the old one is overwritten with chaff (spec §11.4).
+    /// New KEYWRAP with the same V and a REVOKE_KEYWRAP of the old one in the vault's log; the old
+    /// block is overwritten with chaff (spec §11.4).
     pub fn change_password(&self, session: Arc<Session>, old: String, new: String) -> Result<ChangePasswordResult> {
         let (old, new) = (Zeroizing::new(old), Zeroizing::new(new));
         let old_pk = self.derive(&old)?;
@@ -326,9 +366,8 @@ impl Container {
         if find_keywrap(&heap, cipher, &new_pk, &nonces)?.is_some() {
             return Ok(ChangePasswordResult::PasswordTaken);
         }
-        let mut batch = vec![keywrap_block(cipher, &new_pk, &inner.vault_id, &kw.v)];
-        batch.extend(chaff_blocks(cipher, chaff::on_commit(1)));
-        let positions = append_shuffled(&heap, batch)?;
+        let block = keywrap_block(cipher, &new_pk, &inner.vault_id, &kw.v);
+        let positions = inner.append_with_revoke(&heap, cipher, kw.keywrap_id, vec![block])?;
         heap.overwrite(&[(kw.block_index, cipher.chaff())])?;
         inner.keywrap_index = positions[0];
         Ok(ChangePasswordResult::Changed)
@@ -384,6 +423,37 @@ impl Container {
         let mapping = heap.compact(&remove)?;
         inner.remap(&mapping);
         Ok(remove.len() as u32)
+    }
+
+    /// Merges the container file `other` (a copy of this one from another device or another
+    /// moment) into this one: every block of it that is not here is appended, shuffled
+    /// (spec §7.3). Needs no password and does not know how many vaults either holds. Open
+    /// sessions see the new blocks at their next unlock, where blocks a vault had already
+    /// erased are recognised as dead and erased again (§8.2) and revoked KEYWRAPs stay revoked
+    /// (§11.3). Returns how many blocks were added.
+    pub fn merge_from(&self, other: String) -> Result<u32> {
+        let src = Heap::new(&other);
+        if !src.exists() {
+            return Err(CoreError::Invalid("not a container".into()));
+        }
+        src.repair_tail()?;
+        if src.read_salt()? != self.shared.salt {
+            return Err(CoreError::Invalid("not a copy of this container".into()));
+        }
+        let heap = guard(&self.shared.heap)?;
+        let here: std::collections::HashSet<Nonce> = heap.read_nonces()?.into_iter().collect();
+        let theirs = src.read_nonces()?;
+        let mut seen = std::collections::HashSet::new();
+        let missing: Vec<u32> = (0..theirs.len() as u32)
+            .filter(|&i| !here.contains(&theirs[i as usize]) && seen.insert(theirs[i as usize]))
+            .collect();
+        let mut blocks = Vec::with_capacity(missing.len());
+        src.read_blocks(&missing, |_, b| blocks.push(b))?;
+        let n = blocks.len() as u32;
+        if n > 0 {
+            append_shuffled(&heap, blocks)?;
+        }
+        Ok(n)
     }
 
     pub fn add_background_chaff(&self) -> Result<()> {

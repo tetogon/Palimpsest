@@ -8,6 +8,7 @@ use zeroize::Zeroize;
 const VERSION: u8 = 1;
 const TYPE_PUT: u8 = 0x01;
 const TYPE_DELETE: u8 = 0x02;
+const TYPE_REVOKE: u8 = 0x03;
 const HEADER: usize = 1 + 1 + 8 + 16;
 
 const T_ENTRY_ID: u8 = 0x01;
@@ -19,6 +20,7 @@ const T_TITLE: u8 = 0x06;
 const T_BODY: u8 = 0x07;
 const T_TAG: u8 = 0x08;
 const T_ATTACHMENT: u8 = 0x09;
+const T_KEYWRAP_ID: u8 = 0x0A;
 
 const REPEATABLE: [u8; 2] = [T_TAG, T_ATTACHMENT];
 const KNOWN_PUT: [u8; 8] = [T_ENTRY_ID, T_SUPERSEDES, T_ENTRY_TYPE, T_CREATED, T_DIARY_DATE, T_TITLE, T_BODY, T_TAG];
@@ -195,6 +197,45 @@ impl Op {
     }
 }
 
+/// REVOKE_KEYWRAP (spec §6.2, §11.4): the KEYWRAP `keywrap_id` no longer opens the vault, even
+/// if a merge or an old copy brings its block back. A tombstone: it never dies (§8.1). Kept
+/// apart from [Op], which is about entries.
+pub struct RevokeOp {
+    pub op_id: Id,
+    pub hlc: u64,
+    pub session_id: Id,
+    pub keywrap_id: Id,
+}
+
+impl RevokeOp {
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(HEADER + 18);
+        out.push(VERSION);
+        out.push(TYPE_REVOKE);
+        out.extend_from_slice(&self.hlc.to_le_bytes());
+        out.extend_from_slice(&self.session_id);
+        let mut w = tlv::Writer::default();
+        w.put(T_KEYWRAP_ID, &self.keywrap_id);
+        out.extend_from_slice(&w.into_bytes());
+        out
+    }
+
+    pub fn decode(op_id: Id, data: &[u8]) -> Option<RevokeOp> {
+        if data.len() < HEADER || data[0] != VERSION || data[1] != TYPE_REVOKE {
+            return None;
+        }
+        let hlc = u64::from_le_bytes(data[2..10].try_into().ok()?);
+        let session_id: Id = data[10..26].try_into().ok()?;
+        let fields = tlv::parse(data, HEADER)?;
+        let mut ids = fields.iter().filter(|f| f.tag == T_KEYWRAP_ID);
+        let keywrap_id: Id = ids.next()?.value.as_slice().try_into().ok()?;
+        if ids.next().is_some() {
+            return None;
+        }
+        Some(RevokeOp { op_id, hlc, session_id, keywrap_id })
+    }
+}
+
 /// Concatenated 16-byte ids, strictly ascending (canonical, no duplicates).
 fn parse_ids(b: &[u8]) -> Option<BTreeSet<Id>> {
     if b.len() % 16 != 0 {
@@ -252,6 +293,18 @@ mod tests {
     fn random_input_never_panics() {
         for n in 0..3000 {
             let _ = Op::decode(id(), &random_bytes(n % 300));
+            let _ = RevokeOp::decode(id(), &random_bytes(n % 300));
         }
+    }
+
+    #[test]
+    fn revoke_round_trips_and_is_not_an_entry_op() {
+        let r = RevokeOp { op_id: id(), hlc: 7, session_id: id(), keywrap_id: id() };
+        let bytes = r.encode();
+        let back = RevokeOp::decode(r.op_id, &bytes).unwrap();
+        assert_eq!((back.hlc, back.session_id, back.keywrap_id), (r.hlc, r.session_id, r.keywrap_id));
+        assert!(Op::decode(r.op_id, &bytes).is_none());
+        let put = Op::Delete(DeleteOp { op_id: id(), hlc: 1, session_id: id(), entry_id: id(), supersedes: BTreeSet::new() });
+        assert!(RevokeOp::decode(put.op_id(), &put.encode()).is_none());
     }
 }
