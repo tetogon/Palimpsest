@@ -1,7 +1,7 @@
-Tables edited as a grid (▦), with rows and columns on the bar.
-Code highlighted by language (```kotlin, ```python…).
-Lock after leaving the app: up to 24 h or never.
-Drafts saved on leaving the app and every 2 min.
-Restoring a backup asks for one of its passwords.
-A changed password stays revoked when an old copy is merged back.
-Rarer, larger chaff bursts (~23 MB a year). The threat model now says one copy plus the decoy password works like two copies.
+Sync with a file in Google Drive, Proton Drive, Cryptomator or Syncthing, still without internet access. Merge with a copy by hand.
+Markdown export (unencrypted, with a warning).
+Tables edited as a grid; code highlighted by language.
+Background lock up to 24 h or never.
+Drafts saved on leaving the app.
+Restore asks for a password.
+Rarer, larger chaff bursts. The threat model now says one copy plus the decoy password works like two copies.
