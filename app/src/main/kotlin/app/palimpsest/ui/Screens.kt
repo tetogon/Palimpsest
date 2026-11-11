@@ -497,7 +497,8 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
         SettingsDialog.SYNC -> SyncDialog(
             current = ui.syncName,
             onPick = { close(); syncPick.launch(arrayOf("*/*")) },
-            onCreate = { close(); syncCreate.launch("palimpsest-$stamp.bin") },
+            // A neutral name, unique to the minute: the file sits in someone else's cloud (R11c).
+            onCreate = { close(); syncCreate.launch("sync-${java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmm"))}.bin") },
             onSyncNow = { close(); vm.syncNow() },
             onStop = { close(); vm.stopSync() },
             onDismiss = close,

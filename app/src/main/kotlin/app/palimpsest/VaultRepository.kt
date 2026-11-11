@@ -57,6 +57,10 @@ class VaultRepository(private val file: File, private val transfers: File) {
         runCatching { onBackground?.invoke(_session.value) }
     }
 
+    /** Called after the vault is locked, to sync the blocks the session wrote last. */
+    @Volatile
+    var afterLock: (() -> Unit)? = null
+
     /** Called after the vault is locked or deleted (clears our clipboard content). */
     @Volatile
     var onLocked: (() -> Unit)? = null
@@ -110,6 +114,7 @@ class VaultRepository(private val file: File, private val transfers: File) {
         _session.value = null
         s.close() // frees the native object; keys were already wiped by lock()
         onLocked?.invoke()
+        afterLock?.invoke()
     }
 
     // ---- Backup and transfer (spec §11.7) --------------------------------------------------
@@ -140,11 +145,14 @@ class VaultRepository(private val file: File, private val transfers: File) {
             val copy = File(dir, "restore.bin")
             copy.outputStream().use { input.copyTo(it) }
             if (!backupOpens(copy.absolutePath, password)) return false
-            lock()
-            synchronized(this) {
-                opened?.close()
-                opened = null
-                return restoreContainer(file.absolutePath, copy.absolutePath, password)
+            // No sync may touch the file while it is being replaced.
+            synchronized(syncLock) {
+                lock()
+                synchronized(this) {
+                    opened?.close()
+                    opened = null
+                    return restoreContainer(file.absolutePath, copy.absolutePath, password)
+                }
             }
         } finally {
             dir.deleteRecursively()

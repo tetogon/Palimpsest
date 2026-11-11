@@ -10,6 +10,7 @@ import app.palimpsest.R
 import android.graphics.Bitmap
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.util.LruCache
 import app.palimpsest.ImagePrep
@@ -163,8 +164,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         repo.beforeLock = { session -> saveDraft(session) }
         repo.onBackground = { session ->
             session?.let(::autosave)
-            autoSync()
+            autoSync(throttled = true)
         }
+        // The session's last blocks (its end chaff) are written at lock: send them out then.
+        repo.afterLock = { viewModelScope.launch(Dispatchers.IO) { autoSync() } }
         viewModelScope.launch(Dispatchers.IO) {
             _ui.update { it.copy(syncName = syncName()) }
             autoSync()
@@ -751,17 +754,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** elapsedRealtime of the last finished sync; see [autoSync]. */
+    @Volatile
+    private var lastSync = 0L
+
     /**
-     * At start, on unlock and when the app goes to the background, with a vault open or not.
-     * Quiet: a failure, or a copy too large to take in unasked, waits for "Sync now".
+     * At start, on unlock, at lock and when the app goes to the background, with a vault open or
+     * not. [throttled] (leaving the app) skips a sync within [SYNC_EVERY_MS] of the last one:
+     * every upload is a new version for the provider (and one more copy, R13), and some drive
+     * apps choke on a file rewritten over and over. Quiet: a failure, or a copy too large to
+     * take in unasked, waits for "Sync now".
      */
-    private fun autoSync() {
+    private fun autoSync(throttled: Boolean = false) {
         val uri = settings.values.value.syncUri?.let(Uri::parse) ?: return
+        if (throttled && lastSync != 0L && SystemClock.elapsedRealtime() - lastSync < SYNC_EVERY_MS) return
         runCatching { sync(uri, VaultRepository.MERGE_LIMIT) }
     }
 
     private fun sync(uri: Uri, limit: UInt): MergeResult {
         val result = repo.syncWith({ resolver.openInputStream(uri) }, { resolver.openOutputStream(uri, "wt") }, limit)
+        lastSync = SystemClock.elapsedRealtime()
         if (result is MergeResult.Merged && result.blocks > 0u) repo.session.value?.let { runCatching { refresh(it) } }
         return result
     }
@@ -1004,6 +1016,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val WRONG_PASSWORD_DELAY_MS = 1_000L
         private const val EMBED_SIDE = 1440
+        const val SYNC_EVERY_MS = 15 * 60_000L
     }
 
     private fun work(block: () -> Unit) {
