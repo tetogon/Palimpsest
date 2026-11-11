@@ -62,9 +62,9 @@ class PalimpsestApp : Application() {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStop(owner: LifecycleOwner) {
                 val seconds = settings.values.value.backgroundLockSeconds
-                backgroundLock = scope.launch {
-                    repository.flush()
-                    if (seconds == AppSettings.NEVER) return@launch
+                // Apart from the lock timer: a hung cloud provider must not keep the vault open.
+                scope.launch { repository.flush() }
+                backgroundLock = if (seconds == AppSettings.NEVER) null else scope.launch {
                     delay(seconds * 1000L)
                     repository.lock()
                 }

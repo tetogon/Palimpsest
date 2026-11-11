@@ -6,6 +6,7 @@ import app.palimpsest.ffi.ChangePasswordResult
 import app.palimpsest.ffi.Container
 import app.palimpsest.ffi.ImportResult
 import app.palimpsest.ffi.Session
+import app.palimpsest.ffi.MergeResult
 import app.palimpsest.ffi.backupOpens
 import app.palimpsest.ffi.restoreContainer
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,6 +20,11 @@ import java.io.OutputStream
  * [transfers] holds files on their way in or out; they are ciphertext only.
  */
 class VaultRepository(private val file: File, private val transfers: File) {
+    companion object {
+        /** Blocks a merge or a sync takes in without asking: 50 MiB. */
+        val MERGE_LIMIT = 12_800u
+    }
+
     @Volatile
     private var opened: Container? = null
 
@@ -41,12 +47,14 @@ class VaultRepository(private val file: File, private val transfers: File) {
 
     /** Called when the app goes to the background, to save the editor's text (see [flush]). */
     @Volatile
-    var onBackground: ((Session) -> Unit)? = null
+    var onBackground: ((Session?) -> Unit)? = null
 
-    /** The app left the foreground, where the system may kill it: save what is unsaved. */
+    /**
+     * The app left the foreground, where the system may kill it: save what is unsaved and
+     * sync, with a vault open or not.
+     */
     fun flush() {
-        val s = _session.value ?: return
-        runCatching { onBackground?.invoke(s) }
+        runCatching { onBackground?.invoke(_session.value) }
     }
 
     /** Called after the vault is locked or deleted (clears our clipboard content). */
@@ -146,24 +154,24 @@ class VaultRepository(private val file: File, private val transfers: File) {
     /**
      * Merges a copy of this container (another phone's, an older backup) into it: the blocks it
      * has and this file lacks are added, for every vault at once, without a password (spec
-     * §7.3). The open vault re-reads itself. Returns how many blocks came in. Throws
-     * [app.palimpsest.ffi.CoreException.Invalid] for a file of another container.
+     * §7.3). The open vault re-reads itself. Nothing is added past [limit] blocks (see the core).
+     * Throws [app.palimpsest.ffi.CoreException.Invalid] for a file of another container.
      */
-    fun mergeFrom(input: InputStream): UInt {
+    fun mergeFrom(input: InputStream, limit: UInt = MERGE_LIMIT): MergeResult {
         val dir = scratch()
         try {
             val copy = File(dir, "merge.bin")
             copy.outputStream().use { input.copyTo(it) }
-            return mergeFile(copy)
+            return mergeFile(copy, limit)
         } finally {
             dir.deleteRecursively()
         }
     }
 
-    private fun mergeFile(copy: File): UInt {
-        val added = container.mergeFrom(copy.absolutePath)
-        if (added > 0u) _session.value?.reload()
-        return added
+    private fun mergeFile(copy: File, limit: UInt): MergeResult {
+        val result = container.mergeFrom(copy.absolutePath, limit)
+        if (result is MergeResult.Merged && result.blocks > 0u) runCatching { _session.value?.reload() }
+        return result
     }
 
     private val syncLock = Any()
@@ -173,20 +181,21 @@ class VaultRepository(private val file: File, private val transfers: File) {
      * system file picker: its blocks are merged in, then the whole container is written back.
      * An empty document just receives the container. Nothing is written when the document
      * already holds exactly this container: every upload is one more copy for the provider.
-     * Returns how many blocks came in.
+     * Needs no open vault. Past [limit] blocks nothing is merged or written.
      */
-    fun syncWith(open: () -> InputStream?, write: () -> OutputStream?): UInt = synchronized(syncLock) {
+    fun syncWith(open: () -> InputStream?, write: () -> OutputStream?, limit: UInt = MERGE_LIMIT): MergeResult = synchronized(syncLock) {
         val dir = scratch()
         try {
             val remote = File(dir, "remote.bin")
             (open() ?: error("cannot read the sync file")).use { input -> remote.outputStream().use { input.copyTo(it) } }
-            val added = if (remote.length() > 0) mergeFile(remote) else 0u
+            val result = if (remote.length() > 0) mergeFile(remote, limit) else MergeResult.Merged(0u)
+            if (result is MergeResult.TooLarge) return result
             val local = File(dir, "local.bin")
             container.backupTo(local.absolutePath)
             if (!sameContent(local, remote)) {
                 (write() ?: error("cannot write the sync file")).use { out -> local.inputStream().use { it.copyTo(out) } }
             }
-            added
+            result
         } finally {
             dir.deleteRecursively()
         }

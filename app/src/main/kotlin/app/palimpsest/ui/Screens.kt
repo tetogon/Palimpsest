@@ -414,6 +414,7 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
                 ActionRow(DownloadIcon, R.string.import_vault, R.string.import_vault_hint) { importFrom.launch(arrayOf("*/*")) }
                 ActionRow(RestoreIcon, R.string.restore_all, R.string.restore_all_hint) { dialog = SettingsDialog.RESTORE }
                 ActionRow(Icons.Filled.AddCircle, R.string.merge_all, R.string.merge_all_hint) { dialog = SettingsDialog.MERGE }
+                ValueRow(Icons.Filled.Share, R.string.sync_title, ui.syncName ?: stringResource(R.string.sync_off)) { dialog = SettingsDialog.SYNC }
             }
 
             if (withVault) {
@@ -422,7 +423,7 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
                 Group {
                     ActionRow(Icons.Filled.Person, R.string.change_password, null) { dialog = SettingsDialog.CHANGE_PASSWORD }
                     ActionRow(UploadIcon, R.string.export_vault, R.string.export_vault_hint) { dialog = SettingsDialog.EXPORT }
-                    ValueRow(Icons.Filled.Share, R.string.sync_title, ui.syncName ?: stringResource(R.string.sync_off)) { dialog = SettingsDialog.SYNC }
+
                     ActionRow(Icons.Filled.Create, R.string.md_export, R.string.md_export_hint) { dialog = SettingsDialog.MD_EXPORT }
                     SwitchRow(Icons.Filled.Refresh, R.string.purge_manual, R.string.purge_hint_short, ui.purgeManual, vm::setPurgeManual)
                     if (ui.purgeManual) {
@@ -447,6 +448,15 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
     }
 
     val close = { dialog = null }
+    ui.largeMerge?.let { large ->
+        AlertDialog(
+            onDismissRequest = vm::dismissLargeMerge,
+            icon = { Icon(Icons.Filled.Warning, null) },
+            text = { Text(stringResource(R.string.merge_large, (large.blocks.toLong() * 4096 / (1024 * 1024)).coerceAtLeast(1)), style = MaterialTheme.typography.bodyLarge) },
+            confirmButton = { TextButton(onClick = vm::confirmLargeMerge) { Text(stringResource(R.string.merge_large_button)) } },
+            dismissButton = { TextButton(onClick = vm::dismissLargeMerge) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
     when (dialog) {
         SettingsDialog.IDLE -> ChoiceDialog(
             R.string.lock_idle, AppSettings.IDLE_OPTIONS.map { it to idleLabel(it) }, values.idleLockMinutes,

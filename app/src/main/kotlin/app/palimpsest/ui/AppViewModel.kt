@@ -20,6 +20,8 @@ import kotlinx.coroutines.withContext
 import app.palimpsest.ffi.ChangePasswordResult
 import app.palimpsest.ffi.CoreException
 import app.palimpsest.ffi.ImportResult
+import app.palimpsest.ffi.MergeResult
+import app.palimpsest.VaultRepository
 import app.palimpsest.ffi.EntryKind
 import app.palimpsest.ffi.EntrySummary
 import app.palimpsest.ffi.Folder
@@ -30,7 +32,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class Draft(
@@ -54,6 +55,9 @@ data class Draft(
     val dirty get() = title != savedTitle || body != savedBody
     val empty get() = title.isBlank() && body.isBlank()
 }
+
+/** [uri] of a copy to merge, or null for the sync file; [blocks] it would add. */
+data class LargeMerge(val uri: Uri?, val blocks: UInt)
 
 /** Where Back goes from an entry opened through a link. */
 sealed interface Back {
@@ -107,6 +111,8 @@ data class UiState(
     val purgeManual: Boolean = false,
     /** Display name of the document this vault syncs the container with; null when off. */
     val syncName: String? = null,
+    /** A merge or a sync that would add more than the limit, waiting for the user's yes. */
+    val largeMerge: LargeMerge? = null,
     /** Blocks of replaced revisions waiting for "erase now" (manual mode). */
     val pendingPurgeBlocks: Int = 0,
     val appSettings: AppSettings.Values = AppSettings.Values(),
@@ -156,14 +162,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     init {
         repo.beforeLock = { session -> saveDraft(session) }
         repo.onBackground = { session ->
-            autosave(session)
-            autoSync(session)
+            session?.let(::autosave)
+            autoSync()
         }
         viewModelScope.launch(Dispatchers.IO) {
-            while (true) {
-                delay(AUTOSAVE_MS)
-                repo.session.value?.let { s -> runCatching { autosave(s) } }
-            }
+            _ui.update { it.copy(syncName = syncName()) }
+            autoSync()
         }
         viewModelScope.launch(Dispatchers.IO) {
             repo.session.collect { session ->
@@ -171,10 +175,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     withMain { player.stop() }
                     thumbs.evictAll()
                     embeds.evictAll()
-                    _ui.value = UiState(appSettings = settings.values.value)
+                    _ui.value = UiState(appSettings = settings.values.value, syncName = syncName())
                 } else {
                     showList(session)
-                    autoSync(session)
+                    autoSync()
                 }
             }
         }
@@ -681,18 +685,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 reclaimableBlocks = session.reclaimableBlocks().toInt(),
                 purgeManual = session.purgeMode() == PurgeMode.MANUAL,
                 pendingPurgeBlocks = session.pendingPurgeBlocks().toInt(),
-                syncName = session.syncUri()?.let { u -> displayName(Uri.parse(u)) },
+
                 info = null,
             )
         }
     }
 
     /** A copy of this container from another phone or an older backup; see [VaultRepository.mergeFrom]. */
-    fun merge(uri: Uri) = work {
-        val result = runCatching { resolver.openInputStream(uri)?.use(repo::mergeFrom) ?: error("no input") }
+    fun merge(uri: Uri, limit: UInt = VaultRepository.MERGE_LIMIT) = work {
+        val result = runCatching { resolver.openInputStream(uri)?.use { repo.mergeFrom(it, limit) } ?: error("no input") }
+        val merged = result.getOrNull()
         when {
             result.isFailure -> fail(if (result.exceptionOrNull() is CoreException.Invalid) R.string.not_this_container else R.string.error_generic)
-            result.getOrNull() == 0u -> done(R.string.merge_nothing)
+            merged is MergeResult.TooLarge -> _ui.update { it.copy(largeMerge = LargeMerge(uri, merged.blocks)) }
+            merged is MergeResult.Merged && merged.blocks == 0u -> done(R.string.merge_nothing)
             else -> {
                 repo.session.value?.let(::refresh)
                 done(R.string.merge_done)
@@ -700,53 +706,67 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** The user saw how much a copy would add and agreed ([LargeMerge.uri] null: the sync file). */
+    fun confirmLargeMerge() {
+        val large = _ui.value.largeMerge ?: return
+        _ui.update { it.copy(largeMerge = null) }
+        if (large.uri != null) merge(large.uri, UInt.MAX_VALUE) else work { syncNowWith(UInt.MAX_VALUE) }
+    }
+
+    fun dismissLargeMerge() = _ui.update { it.copy(largeMerge = null) }
+
     /**
-     * Syncs with [uri] from now on: the app keeps its access to the document across restarts,
-     * and this vault remembers it (spec §10), so syncing runs only while this vault is open.
+     * This phone syncs with [uri] from now on. The app keeps its access to the document across
+     * restarts; the choice is this phone's (another phone has its own link to the same file).
      */
     fun startSync(uri: Uri) = work {
-        val session = repo.session.value ?: return@work
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         resolver.takePersistableUriPermission(uri, flags)
-        session.setSyncUri(uri.toString())
+        updateAppSettings(settings.values.value.copy(syncUri = uri.toString()))
         _ui.update { it.copy(syncName = displayName(uri)) }
-        syncWith(session, uri, manual = true)
+        syncNowWith(VaultRepository.MERGE_LIMIT)
     }
 
     fun stopSync() = work {
-        val session = repo.session.value ?: return@work
-        session.syncUri()?.let { u ->
+        settings.values.value.syncUri?.let { u ->
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             runCatching { resolver.releasePersistableUriPermission(Uri.parse(u), flags) }
         }
-        session.setSyncUri(null)
+        updateAppSettings(settings.values.value.copy(syncUri = null))
         _ui.update { it.copy(syncName = null) }
         done(R.string.sync_stopped)
     }
 
-    fun syncNow() = work {
-        val session = repo.session.value ?: return@work
-        val uri = session.syncUri()?.let(Uri::parse) ?: return@work
-        syncWith(session, uri, manual = true)
-    }
+    fun syncNow() = work { syncNowWith(VaultRepository.MERGE_LIMIT) }
 
-    /** On unlock and when the app goes to the background; quiet, a failure waits for the next time. */
-    private fun autoSync(session: Session) {
-        val uri = runCatching { session.syncUri() }.getOrNull()?.let(Uri::parse) ?: return
-        runCatching { syncWith(session, uri, manual = false) }
-    }
-
-    private fun syncWith(session: Session, uri: Uri, manual: Boolean) {
-        val result = runCatching { repo.syncWith({ resolver.openInputStream(uri) }, { resolver.openOutputStream(uri, "wt") }) }
-        if (result.getOrNull()?.let { it > 0u } == true && repo.session.value === session) refresh(session)
-        if (!manual) return
+    private fun syncNowWith(limit: UInt) {
+        val uri = settings.values.value.syncUri?.let(Uri::parse) ?: return
+        val result = runCatching { sync(uri, limit) }
+        val merged = result.getOrNull()
         when {
+            merged is MergeResult.TooLarge -> _ui.update { it.copy(largeMerge = LargeMerge(null, merged.blocks)) }
             result.isSuccess -> done(R.string.sync_done)
             result.exceptionOrNull() is CoreException.Invalid -> fail(R.string.sync_other_container)
             else -> fail(R.string.sync_failed)
         }
     }
 
+    /**
+     * At start, on unlock and when the app goes to the background, with a vault open or not.
+     * Quiet: a failure, or a copy too large to take in unasked, waits for "Sync now".
+     */
+    private fun autoSync() {
+        val uri = settings.values.value.syncUri?.let(Uri::parse) ?: return
+        runCatching { sync(uri, VaultRepository.MERGE_LIMIT) }
+    }
+
+    private fun sync(uri: Uri, limit: UInt): MergeResult {
+        val result = repo.syncWith({ resolver.openInputStream(uri) }, { resolver.openOutputStream(uri, "wt") }, limit)
+        if (result is MergeResult.Merged && result.blocks > 0u) repo.session.value?.let { runCatching { refresh(it) } }
+        return result
+    }
+
+    private fun syncName(): String? = settings.values.value.syncUri?.let { displayName(Uri.parse(it)) }
     private fun displayName(uri: Uri): String = runCatching {
         resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null
@@ -915,9 +935,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The text of the open draft, while the editor stays open: when the app goes to the
-     * background (the system may kill it there) and every [AUTOSAVE_MS] while it has changes.
-     * Not more often: every save is a commit with its own portion of chaff.
+     * The text of the open draft, while the editor stays open, when the app goes to the
+     * background: the system may kill it there. Not on a timer: every save is a commit with
+     * its own portion of chaff, and the T5 model counts writes, not minutes.
      */
     private fun autosave(session: Session): Unit = synchronized(saveLock) {
         val d = draft() ?: return
@@ -984,7 +1004,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val WRONG_PASSWORD_DELAY_MS = 1_000L
         private const val EMBED_SIDE = 1440
-        const val AUTOSAVE_MS = 120_000L
     }
 
     private fun work(block: () -> Unit) {

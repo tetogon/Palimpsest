@@ -170,7 +170,7 @@
     <string name="password_changed">Password changed. Copies of the file made earlier still open with the old one.</string>
 
     <string name="wipe_title">Destroy another vault on open</string>
-    <string name="wipe_hint">Enter the password of another vault. The next time anyone opens this vault, that one is silently destroyed for good and this rule disappears. Copies of the file made earlier and synced copies are not affected.</string>
+    <string name="wipe_hint">Enter the password of another vault. The next time anyone opens this vault, that one is silently destroyed for good and this rule disappears. Copies of the file made earlier are not affected, and with sync on, the destroyed vault comes back from the cloud file and from other phones: turn sync off everywhere first.</string>
     <string name="wipe_target_password">Vault password</string>
     <string name="wipe_arm">Arm</string>
     <string name="wipe_is_armed">Armed: fires on the next open of this vault.</string>
@@ -208,12 +208,12 @@
     <string name="reclaim_hint">Deleted and replaced entries of this vault leave placeholder blocks behind so the file never shrinks. Removing them makes the file smaller, which someone comparing two copies of it could notice.</string>
     <string name="reclaim_available">Can be freed: %d KB</string>
     <string name="reclaim_button">Free up space</string>
-    <string name="reclaim_confirm">Shrink the file now? Someone who kept an earlier copy of it could see that blocks disappeared.</string>
+    <string name="reclaim_confirm">Shrink the file now? Someone who kept an earlier copy of it could see that blocks disappeared. Erased revisions can also come back from earlier copies: backups, the sync file, other phones.</string>
     <string name="reclaim_done">Space freed</string>
 
     <string name="delete_vault">Delete vault</string>
     <string name="delete_vault_hint">Destroys every entry of this vault. Cannot be undone.</string>
-    <string name="delete_vault_confirm">Destroy this vault and all its entries for good?</string>
+    <string name="delete_vault_confirm">Destroy this vault and all its entries for good? With sync on, it comes back from the cloud file and from other phones: turn sync off everywhere first.</string>
     <string name="md_align">Alignment</string>
     <string name="align_left">Left</string>
     <string name="align_center">Centre</string>
@@ -256,12 +256,14 @@
     <string name="merge_confirm">Choose a copy of this container: another phone\'s or an older backup. Entries from it are added here, in every vault at once, and no password is needed. Vaults deleted here since that copy was made come back.</string>
     <string name="merge_button">Choose a copy</string>
     <string name="merge_done">Merged</string>
+    <string name="merge_large">This copy would add about %1$d MB. What a merge adds stays in the file for good, and a copy can hold anything. Merge it only if you trust where it came from.</string>
+    <string name="merge_large_button">Merge anyway</string>
     <string name="merge_nothing">Nothing new in this copy</string>
     <string name="not_this_container">This file is not a copy of this container</string>
     <string name="sync_title">Sync with a cloud file</string>
     <string name="sync_off">Off</string>
-    <string name="sync_explain">The whole container, every vault, is kept in step with one file in Google Drive, Proton Drive, a Cryptomator vault, a Syncthing folder or anything else the file picker offers. The app itself still has no internet access: the drive\'s app moves the file. Sync runs when this vault is opened, when you leave the app and on demand. On another phone, first restore from that file, then choose it here too.</string>
-    <string name="sync_warning">Every upload is one more copy of the file, and drives keep old versions. Someone with those copies and the password of another vault can tell from the growth that a hidden vault exists. Set sync up in the vault you use most, and keep a hidden vault less active.</string>
+    <string name="sync_explain">The whole container, every vault, is kept in step with one file in Google Drive, Proton Drive, a Cryptomator vault, a Syncthing folder or anything else the file picker offers. The app itself still has no internet access: the drive\'s app moves the file. Sync needs no password and runs when the app starts, when a vault is opened, when you leave the app and on demand. This choice is this phone\'s own. On another phone, first restore from that file, then choose it there too.</string>
+    <string name="sync_warning">Every upload is one more copy of the file, and drives keep old versions. Someone with those copies and the password of one vault can tell from the growth that another, hidden vault exists. Keep a hidden vault less active than the others. A vault you destroy comes back from the sync file unless sync is off everywhere.</string>
     <string name="sync_create">New file</string>
     <string name="sync_pick">Existing file</string>
     <string name="sync_now">Sync now</string>

@@ -34,6 +34,12 @@ class AppSettings(context: Context) {
         val swipeSections: Boolean = true,
         /** The diary shows a month calendar instead of the timeline. */
         val diaryCalendar: Boolean = false,
+        /**
+         * The document this phone syncs the container with (spec §7.3), granted through the
+         * system file picker. Per device, like the grant itself, and not in any vault: the
+         * system keeps the grant outside the vaults anyway, and sync needs no password.
+         */
+        val syncUri: String? = null,
     )
 
     private val prefs = context.getSharedPreferences("app", Context.MODE_PRIVATE)
@@ -51,6 +57,7 @@ class AppSettings(context: Context) {
             allowScreenshots = prefs.getBoolean(SCREENSHOTS, false),
             swipeSections = prefs.getBoolean(SWIPE, true),
             diaryCalendar = prefs.getBoolean(DIARY_CALENDAR, false),
+            syncUri = prefs.getString(SYNC_URI, null),
         ),
     )
     val values: StateFlow<Values> = _values
@@ -68,6 +75,7 @@ class AppSettings(context: Context) {
             .putBoolean(SCREENSHOTS, v.allowScreenshots)
             .putBoolean(SWIPE, v.swipeSections)
             .putBoolean(DIARY_CALENDAR, v.diaryCalendar)
+            .putString(SYNC_URI, v.syncUri)
             .apply()
         _values.value = v
     }
@@ -87,5 +95,6 @@ class AppSettings(context: Context) {
         private const val SCREENSHOTS = "allow_screenshots"
         private const val SWIPE = "swipe_sections"
         private const val DIARY_CALENDAR = "diary_calendar"
+        private const val SYNC_URI = "sync_uri"
     }
 }
