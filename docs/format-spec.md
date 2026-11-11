@@ -354,6 +354,16 @@ the protocol are described separately. Requirements for a transport:
 * the transport's settings are kept **inside the vault** (a settings PUT), and syncing runs
   only while that vault is open (§10).
 
+The Android app's transport is one document reached through the system file picker (a file in
+Google Drive, Proton Drive, a Cryptomator vault, a Syncthing folder), so the app needs no
+network permission. One sync: read the document, merge it in, write the whole container back,
+skipping the write when the document already holds exactly this container. A sync runs when
+the vault holding the setting is unlocked, when the app goes to the background and on demand.
+A device joins by restoring from the document first: merging needs equal salt blocks.
+
+Setting 0x42 `sync` is a nested TLV: 0x01 transport u8 (1 = a picked document), 0x02 its URI
+(UTF-8).
+
 ## 8. Deletion
 
 ### 8.1 Dead objects

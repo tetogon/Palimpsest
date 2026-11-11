@@ -64,8 +64,14 @@ anyone holding the file:
 - "Erase manually" mode: replaced revisions are kept until you ask, so two copies of the file
   do not reveal edits in a hidden vault through changed blocks. See the
   [T5 simulation](docs/t5-simulation.md).
-- Backup of the whole container (all vaults, chaff included), restore, and export of one
-  vault into a separate file under a fresh vault key. Import merges newer entries.
+- Backup of the whole container (all vaults, chaff included), restore (it asks for a password
+  that opens a vault in the backup), and export of one vault into a separate file under a
+  fresh vault key. Import merges newer entries.
+- Sync without internet access: the whole container is kept in step with one file in Google
+  Drive, Proton Drive, a Cryptomator vault or a Syncthing folder, reached through the system
+  file picker. Copies merge by taking the union of their blocks, so no password is needed and
+  hidden vaults sync without showing. "Merge with a copy" does the same once, by hand.
+- Export of one vault as Markdown files in a ZIP, unencrypted, behind a clear warning.
 
 **Android hygiene**
 - No `INTERNET` permission. No WebView: Markdown is rendered natively.

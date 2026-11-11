@@ -62,5 +62,12 @@ Ground rules:
 - [x] F-Droid release
 - [x] Reproducible builds
 
+## Stage 9. Sync
+- [x] Merging copies of a container by the union of their blocks, without a password (spec §7.3)
+- [x] A password that opens two vaults after a merge pours one into the other
+- [x] "Merge with a copy" by hand
+- [x] Sync with a document in a cloud drive or a synced folder through the system file picker
+- [x] Export to Markdown/ZIP in plaintext (with a warning)
+
 ## Later
-Export to `.md`/ZIP in plaintext (with a warning).
+- [ ] A desktop CLI on the same Rust core: list, read, search, export, merge
