@@ -70,6 +70,11 @@
     <string name="md_strike">Strikethrough</string>
     <string name="md_formula">Formula</string>
     <string name="md_table">Table</string>
+    <string name="table_row_add">+ Row</string>
+    <string name="table_col_add">+ Column</string>
+    <string name="table_row_remove">− Row</string>
+    <string name="table_col_remove">− Column</string>
+    <string name="table_delete">Delete table</string>
     <string name="md_bullets">Bulleted list</string>
     <string name="md_numbers">Numbered list</string>
     <string name="md_tasks">Checklist</string>

@@ -41,6 +41,7 @@ import android.content.Context
 import android.Manifest
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -223,12 +224,86 @@ fun EditorScreen(draft: Draft, ui: UiState, vm: AppViewModel) {
     val selectedPhoto = doc.firstOrNull { it.key == selected } as? DocPhoto
     if (selected != null && selectedPhoto == null) selected = null
     val words = remember(draft.title, doc) {
-        Md.wordCount(draft.title + " " + doc.joinToString(" ") { if (it is DocText) it.text else (it as DocPhoto).side })
+        Md.wordCount(
+            draft.title + " " + doc.joinToString(" ") {
+                when (it) {
+                    is DocText -> it.text
+                    is DocPhoto -> it.side
+                    is DocTable -> it.cells.flatten().joinToString(" ")
+                }
+            },
+        )
+    }
+
+    // Tables: the cell with focus (its tools replace the text tools) and a cell to move focus to.
+    var cell by remember { mutableStateOf<TableCell?>(null) }
+    var cellFocus by remember { mutableStateOf<TableCell?>(null) }
+    val focusedCell = cell
+    val focusedTable = focusedCell?.let { c -> doc.firstOrNull { it.key == c.key } as? DocTable }
+    if (focusedCell != null && focusedTable == null) cell = null
+    // Typing in one cell is one undo step until another cell is edited or two seconds pass.
+    val lastCellEdit = remember { arrayOfNulls<Pair<TableCell, Long>>(1) }
+    fun editCell(c: TableCell, text: String) {
+        val t = doc.firstOrNull { it.key == c.key } as? DocTable ?: return
+        if (t.cells.getOrNull(c.row)?.getOrNull(c.col)?.let { it == text } != false) return
+        val now = android.os.SystemClock.uptimeMillis()
+        val last = lastCellEdit[0]
+        val next = Doc.updateTable(doc, c.key) { it.setCell(c.row, c.col, text) }
+        if (last != null && last.first == c && now - last.second < 2000) commit(next) else commitLayout(next)
+        lastCellEdit[0] = c to now
+    }
+    fun changeTable(t: DocTable, focusTo: TableCell) {
+        commitLayout(Doc.updateTable(doc, t.key) { t })
+        lastCellEdit[0] = null
+        cell = focusTo
+        cellFocus = focusTo
+    }
+    fun nextCell(c: TableCell) {
+        val t = doc.firstOrNull { it.key == c.key } as? DocTable ?: return
+        cellFocus = when {
+            c.col + 1 < t.cols -> c.copy(col = c.col + 1)
+            c.row + 1 < t.rows -> TableCell(c.key, c.row + 1, 0)
+            else -> {
+                // Past the last cell: a new row, as in a spreadsheet.
+                commitLayout(Doc.updateTable(doc, c.key) { it.addRow(it.rows) })
+                TableCell(c.key, t.rows, 0)
+            }
+        }
+    }
+    val rootView = LocalView.current
+    fun leaveCell() {
+        rootView.findFocus()?.let { v ->
+            v.clearFocus()
+            v.context.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(v.windowToken, 0)
+        }
+        cell = null
+    }
+    /** A new table under the cursor's line, or at the end; focus goes to its first cell. */
+    fun insertTable() {
+        val t = DocTable.empty(Doc.key())
+        val c = active
+        val key = controllers.entries.firstOrNull { it.value === c }?.key
+        val view = c?.view
+        val text = view?.text?.toString()
+        val next = when {
+            key != null && key > 0 && view != null && text != null -> {
+                val end = text.indexOf('\n', view.selectionEnd.coerceIn(0, text.length)).let { if (it < 0) text.length else it }
+                Doc.insert(doc, t, key, end)
+            }
+            key != null && key < 0 -> {
+                val i = doc.indexOfFirst { it.key == -key }
+                doc.getOrNull(i + 1)?.let { Doc.insert(doc, t, it.key, 0) } ?: doc
+            }
+            else -> (doc.last() as DocText).let { Doc.insert(doc, t, it.key, it.text.length) }
+        }
+        commitLayout(next)
+        cellFocus = TableCell(t.key, 0, 0)
     }
 
     fun select(key: Long?) {
         selected = key
         if (key != null) {
+            cell = null
             // The photo takes over: the keyboard goes away and the bar shows the photo's options.
             active?.view?.let { v ->
                 v.clearFocus()
@@ -438,11 +513,22 @@ fun EditorScreen(draft: Draft, ui: UiState, vm: AppViewModel) {
                             onFocused = { c ->
                                 active = c
                                 selected = null
+                                cell = null
                             },
                             onSelect = ::select,
-                            onFocusHandled = { focus = null },
+                            onFocusHandled = {
+                                focus = null
+                                cellFocus = null
+                            },
                             find = find,
                             onDoubleBracket = { c -> linking = c to true },
+                            cellFocus = cellFocus,
+                            onCell = ::editCell,
+                            onCellFocused = { c ->
+                                cell = c
+                                selected = null
+                            },
+                            onNextCell = ::nextCell,
                         )
                         // Room below the text; a tap there continues the last paragraph.
                         Box(
@@ -458,7 +544,20 @@ fun EditorScreen(draft: Draft, ui: UiState, vm: AppViewModel) {
                         canUndo = undoLog.isNotEmpty(), canRedo = redoLog.isNotEmpty(),
                         onUndo = ::undo, onRedo = ::redo,
                         onNoteLink = { active?.let { linking = it to false } },
-                        tools = selectedPhoto?.let { p ->
+                        onTable = ::insertTable,
+                        tools = if (focusedTable != null && focusedCell != null) {
+                            {
+                                TableTools(
+                                    focusedTable, focusedCell,
+                                    onChange = ::changeTable,
+                                    onDelete = {
+                                        leaveCell()
+                                        commitLayout(Doc.remove(doc, focusedTable.key))
+                                    },
+                                    onDone = ::leaveCell,
+                                )
+                            }
+                        } else selectedPhoto?.let { p ->
                             {
                                 PhotoTools(
                                     p,

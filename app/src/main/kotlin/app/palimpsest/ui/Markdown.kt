@@ -115,7 +115,7 @@ object Md {
     val NUMBERED = Regex("""^(\s*)(\d{1,9})([.)])\s+(.*)$""")
     val QUOTE = Regex("""^>\s?(.*)$""")
     private val RULE = Regex("""^\s*([-*_])(\s*\1){2,}\s*$""")
-    private val FENCE = Regex("""^\s*```""")
+    val FENCE = Regex("""^\s*```""")
     private val FENCE_LANG = Regex("""^\s*```\s*([\w+#.-]*)""")
     private val TABLE_DELIMITER = Regex("""^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$""")
 
@@ -128,7 +128,7 @@ object Md {
     }
 
     /** The table starting at [lines][at], or null; the second value is the line after it. */
-    private fun table(lines: List<String>, at: Int): Pair<MdBlock.Table, Int>? {
+    fun table(lines: List<String>, at: Int): Pair<MdBlock.Table, Int>? {
         if (at + 1 >= lines.size || '|' !in lines[at] || '|' !in lines[at + 1]) return null
         if (!TABLE_DELIMITER.matches(lines[at + 1])) return null
         val header = tableCells(lines[at])

@@ -138,7 +138,7 @@ class PhotoDrag {
         }
         return when (val b = best) {
             is DocText -> views[b.key]?.let { textTarget(b.key, it, bestRect, p.y) } ?: DropTarget.Text(b.key, 0, bestRect.top)
-            is DocPhoto -> {
+            is DocPhoto, is DocTable -> {
                 val i = doc.indexOf(b)
                 if (p.y < bestRect.center.y) {
                     val prev = doc[i - 1] as DocText
@@ -324,6 +324,10 @@ fun DocumentEditor(
     onFocusHandled: () -> Unit,
     find: List<String> = emptyList(),
     onDoubleBracket: (MdController) -> Unit = {},
+    cellFocus: TableCell? = null,
+    onCell: (TableCell, String) -> Unit = { _, _ -> },
+    onCellFocused: (TableCell) -> Unit = {},
+    onNextCell: (TableCell) -> Unit = {},
 ) {
     Column(Modifier.fillMaxWidth()) {
         doc.forEachIndexed { i, b ->
@@ -369,6 +373,15 @@ fun DocumentEditor(
                             )
                         }
                     }
+                    is DocTable -> TableEditor(
+                        b,
+                        focus = cellFocus?.takeIf { it.key == b.key },
+                        onFocusHandled = onFocusHandled,
+                        onCell = onCell,
+                        onFocused = onCellFocused,
+                        onNext = onNextCell,
+                        modifier = Modifier.padding(vertical = 6.dp).onGloballyPositioned { drag.blocks[b.key] = it.boundsInRoot() },
+                    )
                 }
             }
         }
@@ -399,6 +412,7 @@ fun DocumentView(
                             }
                         }
                     }
+                    is DocTable -> MarkdownText(b.markdown().joinToString("\n"), {}, onLink, find = find)
                 }
             }
         }

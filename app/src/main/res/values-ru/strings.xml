@@ -69,6 +69,11 @@
     <string name="md_strike">Зачёркнутый</string>
     <string name="md_formula">Формула</string>
     <string name="md_table">Таблица</string>
+    <string name="table_row_add">+ Строка</string>
+    <string name="table_col_add">+ Столбец</string>
+    <string name="table_row_remove">− Строка</string>
+    <string name="table_col_remove">− Столбец</string>
+    <string name="table_delete">Удалить таблицу</string>
     <string name="md_bullets">Маркированный список</string>
     <string name="md_numbers">Нумерованный список</string>
     <string name="md_tasks">Чек-лист</string>

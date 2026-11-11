@@ -362,14 +362,6 @@ class MdController {
         view?.setSelection((start + link.length).coerceAtMost(text.length))
     }
 
-    /** An empty 2 × 2 table on lines of its own, the cursor in the first header cell. */
-    fun table() = edit { text, s, e ->
-        val before = if (s > 0 && text[s - 1] != '\n') "\n" else ""
-        val after = if (e < text.length && text[e] != '\n') "\n" else ""
-        text.replace(s, e, "$before|  |  |\n|---|---|\n|  |  |$after")
-        view?.setSelection(s + before.length + 2)
-    }
-
     /** Cycles the current line through #, ##, ### and plain text, keeping its alignment. */
     fun heading() = edit { text, s, _ ->
         val (ls, le) = lineBounds(text, s)
@@ -735,6 +727,7 @@ fun FormatBar(
     onRedo: () -> Unit,
     onNoteLink: () -> Unit,
     modifier: Modifier = Modifier,
+    onTable: () -> Unit = {},
     tools: (@Composable RowScope.() -> Unit)? = null,
 ) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier.fillMaxWidth()) {
@@ -761,7 +754,7 @@ fun FormatBar(
                     IconTool(QuoteIcon, R.string.md_quote) { controller.list(MdController.ListKind.QUOTE) }
                     IconTool(CodeIcon, R.string.md_code) { controller.wrap("`") }
                     TextTool("∑", stringResource(R.string.md_formula), FontWeight.Normal) { controller.wrap("$") }
-                    TextTool("▦", stringResource(R.string.md_table), FontWeight.Normal) { controller.table() }
+                    TextTool("▦", stringResource(R.string.md_table), FontWeight.Normal, onClick = onTable)
                     IconTool(NoteLinkIcon, R.string.note_link, onNoteLink)
                     IconTool(LinkIcon, R.string.md_link) { controller.link() }
                 }

@@ -3,9 +3,10 @@ package app.palimpsest.ui
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * An entry body as the editor sees it: text and photos, always alternating, starting and
+ * An entry body as the editor sees it: text alternating with photos and tables, starting and
  * ending with text (possibly empty). Stored as Markdown: a photo is an `![left s](att:…)`
- * line; a photo with text beside it is followed by that text and then a blank line.
+ * line; a photo with text beside it is followed by that text and then a blank line. A table
+ * is a GitHub table, followed by a blank line when text comes after it.
  */
 sealed interface DocBlock {
     /** Stable for the life of the editor, so each text keeps its own field. */
@@ -25,6 +26,47 @@ data class DocPhoto(
     val wraps get() = size != MdSize.L && align != MdAlign.CENTER
 }
 
+/** A table edited as a grid. [cells] row 0 is the header; every row has [align]'s length. */
+data class DocTable(override val key: Long, val cells: List<List<String>>, val align: List<MdAlign>) : DocBlock {
+    val rows get() = cells.size
+    val cols get() = align.size
+
+    fun setCell(row: Int, col: Int, text: String) =
+        copy(cells = cells.mapIndexed { r, line -> if (r == row) line.mapIndexed { c, t -> if (c == col) text else t } else line })
+
+    /** A blank row at [at]; the header (row 0) always stays first. */
+    fun addRow(at: Int) = copy(cells = cells.toMutableList().apply { add(at.coerceIn(1, size), List(cols) { "" }) })
+
+    fun addCol(at: Int): DocTable {
+        val i = at.coerceIn(0, cols)
+        return copy(cells = cells.map { it.toMutableList().apply { add(i, "") } }, align = align.toMutableList().apply { add(i, MdAlign.START) })
+    }
+
+    fun removeRow(row: Int) = if (row < 1 || row >= rows) this else copy(cells = cells.filterIndexed { r, _ -> r != row })
+
+    fun removeCol(col: Int) =
+        if (cols < 2 || col !in 0 until cols) this
+        else copy(cells = cells.map { it.filterIndexed { c, _ -> c != col } }, align = align.filterIndexed { c, _ -> c != col })
+
+    fun setAlign(col: Int, to: MdAlign) = copy(align = align.mapIndexed { c, a -> if (c == col) to else a })
+
+    fun markdown(): List<String> {
+        fun row(cells: List<String>) = cells.joinToString(" | ", "| ", " |") { it.replace("\n", " ").replace("|", "\\|") }
+        val delimiter = align.joinToString("|", "|", "|") {
+            when (it) {
+                MdAlign.START -> "---"
+                MdAlign.CENTER -> ":-:"
+                MdAlign.END -> "--:"
+            }
+        }
+        return listOf(row(cells[0]), delimiter) + cells.drop(1).map(::row)
+    }
+
+    companion object {
+        fun empty(key: Long) = DocTable(key, List(3) { List(2) { "" } }, List(2) { MdAlign.START })
+    }
+}
+
 object Doc {
     private val keys = AtomicLong()
 
@@ -39,7 +81,18 @@ object Doc {
             text.clear()
         }
         var i = 0
+        var code = false
         while (i < lines.size) {
+            if (Md.FENCE.containsMatchIn(lines[i])) code = !code
+            val table = if (code) null else Md.table(lines, i)
+            if (table != null) {
+                flush()
+                val (t, next) = table
+                out += DocTable(key(), listOf(t.header) + t.rows, t.align)
+                i = next
+                if (i < lines.size && lines[i].isBlank()) i++ // the blank line that ends the table
+                continue
+            }
             val e = Md.parseEmbed(lines[i])
             if (e == null) {
                 text += lines[i++]
@@ -74,6 +127,11 @@ object Doc {
                         if ((blocks.getOrNull(i + 1) as? DocText)?.text?.isNotEmpty() == true) parts += ""
                     }
                 }
+                is DocTable -> {
+                    parts += b.markdown()
+                    // Otherwise a next line with a `|` in it would become a row.
+                    if ((blocks.getOrNull(i + 1) as? DocText)?.text?.isNotEmpty() == true) parts += ""
+                }
             }
         }
         return parts.joinToString("\n")
@@ -81,8 +139,8 @@ object Doc {
 
     private fun join(vararg parts: String) = parts.filter { it.isNotEmpty() }.joinToString("\n")
 
-    /** Puts [photo] into text block [textKey] at [offset] (a line start or the end). */
-    fun insert(blocks: List<DocBlock>, photo: DocPhoto, textKey: Long, offset: Int): List<DocBlock> {
+    /** Puts [photo] (or a table) into text block [textKey] at [offset] (a line start or the end). */
+    fun insert(blocks: List<DocBlock>, photo: DocBlock, textKey: Long, offset: Int): List<DocBlock> {
         val i = blocks.indexOfFirst { it.key == textKey }
         val t = blocks.getOrNull(i) as? DocText ?: return blocks
         val at = offset.coerceIn(0, t.text.length)
@@ -93,13 +151,14 @@ object Doc {
         return blocks.subList(0, i) + listOf(head, photo, tail) + blocks.subList(i + 1, blocks.size)
     }
 
-    /** Takes photo [key] out of the text; the text around it (and beside it) joins up. */
+    /** Takes photo (or table) [key] out of the text; the text around it (and beside it) joins up. */
     fun remove(blocks: List<DocBlock>, key: Long): List<DocBlock> {
         val i = blocks.indexOfFirst { it.key == key }
-        val p = blocks.getOrNull(i) as? DocPhoto ?: return blocks
+        val p = blocks.getOrNull(i)?.takeIf { it !is DocText } ?: return blocks
         val before = blocks[i - 1] as DocText
         val after = blocks[i + 1] as DocText
-        val merged = DocText(before.key, join(before.text, if (p.wraps) p.side else "", after.text))
+        val side = (p as? DocPhoto)?.takeIf { it.wraps }?.side.orEmpty()
+        val merged = DocText(before.key, join(before.text, side, after.text))
         return blocks.subList(0, i - 1) + merged + blocks.subList(i + 2, blocks.size)
     }
 
@@ -136,6 +195,9 @@ object Doc {
         out[i] = next
         return out
     }
+
+    fun updateTable(blocks: List<DocBlock>, key: Long, change: (DocTable) -> DocTable): List<DocBlock> =
+        blocks.map { if (it.key == key && it is DocTable) change(it) else it }
 
     fun setText(blocks: List<DocBlock>, key: Long, text: String): List<DocBlock> =
         blocks.map { if (it.key == key && it is DocText) it.copy(text = text) else it }

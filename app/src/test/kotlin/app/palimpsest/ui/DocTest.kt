@@ -12,7 +12,32 @@ class DocTest {
         when (it) {
             is DocText -> "T:" + it.text
             is DocPhoto -> "P:" + it.id.take(1) + "/" + it.side
+            is DocTable -> "G:" + it.cells.joinToString(";") { r -> r.joinToString(",") }
         }
+    }
+
+    @Test
+    fun tables() {
+        val body = "intro\n| a | b \\| c |\n|---|--:|\n| 1 | 2 |\n\nafter | not a row\n```\n| x | y |\n|---|---|\n```"
+        val doc = Doc.parse(body)
+        // The table in the code block stays text.
+        assertEquals(listOf("T:intro", "G:a,b | c;1,2", "T:after | not a row\n```\n| x | y |\n|---|---|\n```"), texts(doc))
+        assertEquals(body, Doc.serialize(doc))
+        val t = doc[1] as DocTable
+        assertEquals(listOf(MdAlign.START, MdAlign.END), t.align)
+        val grown = t.addRow(t.rows).addCol(1).setCell(2, 1, "new").setAlign(1, MdAlign.CENTER)
+        assertEquals(
+            listOf("| a |  | b \\| c |", "|---|:-:|--:|", "| 1 |  | 2 |", "|  | new |  |"),
+            grown.markdown(),
+        )
+        // The header row and the last column stay.
+        assertEquals(t, t.removeRow(0))
+        assertEquals(1, t.removeCol(0).removeCol(0).cols)
+        // A table at the very start, and taken out again.
+        val base = Doc.parse("x")
+        val start = Doc.insert(base, DocTable.empty(Doc.key()), base[0].key, 0)
+        assertEquals("|  |  |\n|---|---|\n|  |  |\n|  |  |\n\nx", Doc.serialize(start))
+        assertEquals("x", Doc.serialize(Doc.remove(start, start[1].key)))
     }
 
     @Test
