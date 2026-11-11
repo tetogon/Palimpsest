@@ -58,6 +58,17 @@ pub enum ArmWipeResult {
 }
 
 #[derive(uniffi::Enum, Debug, PartialEq, Eq)]
+pub enum MergeResult {
+    /// `blocks` came in (0: the copy had nothing new).
+    Merged { blocks: u32 },
+    /// More than the limit would come in; nothing was added.
+    TooLarge { blocks: u32 },
+}
+
+/// Blocks read and appended at once by [Container::merge_from]: 1 MiB.
+const MERGE_BATCH: usize = 256;
+
+#[derive(uniffi::Enum, Debug, PartialEq, Eq)]
 pub enum ImportResult {
     /// No vault in the file opens with that password.
     NotFound,
@@ -458,7 +469,11 @@ impl Container {
     /// sessions see the new blocks at their next unlock, where blocks a vault had already
     /// erased are recognised as dead and erased again (§8.2) and revoked KEYWRAPs stay revoked
     /// (§11.3). Returns how many blocks were added.
-    pub fn merge_from(&self, other: String) -> Result<u32> {
+    ///
+    /// Nothing is added when more than `max_blocks` would come in: a copy can carry any amount
+    /// of blocks nobody can check without a password, and what is added stays for good. The
+    /// caller asks the user and calls again with a higher limit.
+    pub fn merge_from(&self, other: String, max_blocks: u32) -> Result<MergeResult> {
         let src = Heap::new(&other);
         if !src.exists() {
             return Err(CoreError::Invalid("not a container".into()));
@@ -474,13 +489,17 @@ impl Container {
         let missing: Vec<u32> = (0..theirs.len() as u32)
             .filter(|&i| !here.contains(&theirs[i as usize]) && seen.insert(theirs[i as usize]))
             .collect();
-        let mut blocks = Vec::with_capacity(missing.len());
-        src.read_blocks(&missing, |_, b| blocks.push(b))?;
-        let n = blocks.len() as u32;
-        if n > 0 {
+        let n = missing.len() as u32;
+        if n > max_blocks {
+            return Ok(MergeResult::TooLarge { blocks: n });
+        }
+        // A batch at a time: a copy with hundreds of megabytes of attachments must not sit in memory.
+        for chunk in missing.chunks(MERGE_BATCH) {
+            let mut blocks = Vec::with_capacity(chunk.len());
+            src.read_blocks(chunk, |_, b| blocks.push(b))?;
             append_shuffled(&heap, blocks)?;
         }
-        Ok(n)
+        Ok(MergeResult::Merged { blocks: n })
     }
 
     pub fn add_background_chaff(&self) -> Result<()> {

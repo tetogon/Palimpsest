@@ -1,6 +1,6 @@
 //! Container-level behaviour and the single-snapshot indistinguishability check (spec §12 T4).
 
-use crate::container::{restore_container, ArmWipeResult, ChangePasswordResult, Container, ImportResult};
+use crate::container::{restore_container, ArmWipeResult, ChangePasswordResult, Container, ImportResult, MergeResult};
 use crate::crypto::Key;
 use crate::format::*;
 use crate::heap::Heap;
@@ -726,6 +726,31 @@ fn imported_attachments_get_seeds_from_their_content() {
 
 // ---- Convergence (spec §12 T7) -----------------------------------------------------------
 
+impl MergeResult {
+    fn blocks(&self) -> u32 {
+        match self {
+            MergeResult::Merged { blocks } => *blocks,
+            MergeResult::TooLarge { .. } => panic!("over the limit"),
+        }
+    }
+}
+
+#[test]
+fn a_merge_over_the_limit_adds_nothing() {
+    let f = Fixture::new();
+    let c = f.open();
+    create(&c, "pw").lock().unwrap();
+    let (pb, b) = device(&f, "b.bin");
+    let sb = unlock(&b, "pw").unwrap();
+    sb.save(None, EntryKind::Note, None, "big".into(), "x".repeat(40_000)).unwrap();
+    sb.lock().unwrap();
+    let before = c.block_count().unwrap();
+    let MergeResult::TooLarge { blocks } = c.merge_from(pb.clone(), 3).unwrap() else { panic!("expected TooLarge") };
+    assert!(blocks > 3);
+    assert_eq!(c.block_count().unwrap(), before);
+    assert_eq!(c.merge_from(pb, blocks).unwrap(), MergeResult::Merged { blocks });
+}
+
 /// Everything a vault shows, by entry id: title, body, a concurrent version if any.
 fn snapshot(c: &Container, pw: &str) -> Vec<(String, String, String, Option<String>)> {
     let s = unlock(c, pw).expect("vault opens");
@@ -783,8 +808,8 @@ fn merges_in_any_order_give_the_same_state() {
         fs::copy(from, to).unwrap();
     }
     for (dev, first, second) in [(&a, &b0, &c0), (&b, &c0, &a0), (&cc, &a0, &b0)] {
-        dev.merge_from(first.clone()).unwrap();
-        dev.merge_from(second.clone()).unwrap();
+        dev.merge_from(first.clone(), u32::MAX).unwrap().blocks();
+        dev.merge_from(second.clone(), u32::MAX).unwrap().blocks();
     }
     let state = snapshot(&a, "pw");
     assert_eq!(snapshot(&b, "pw"), state);
@@ -803,8 +828,8 @@ fn merges_in_any_order_give_the_same_state() {
 
     // The same copy again adds nothing; B's file as it is now (with chaff and PADs from the
     // sessions above) adds blocks but changes nothing visible.
-    assert_eq!(a.merge_from(b0).unwrap(), 0);
-    a.merge_from(pb.clone()).unwrap();
+    assert_eq!(a.merge_from(b0, u32::MAX).unwrap().blocks(), 0);
+    a.merge_from(pb.clone(), u32::MAX).unwrap().blocks();
     assert_eq!(snapshot(&a, "pw"), state);
 }
 
@@ -821,14 +846,121 @@ fn a_purged_revision_brought_back_by_a_merge_stays_dead() {
     s.save(Some(id.clone()), EntryKind::Note, None, "note".into(), "new text".into()).unwrap(); // purges "old text"
     s.lock().unwrap();
 
-    assert!(c.merge_from(old_copy.clone()).unwrap() > 0, "the old revision's blocks come back");
+    // Erasing kept the nonce, so the old copy has nothing this file lacks: the old revision
+    // does not come back at all.
+    assert_eq!(c.merge_from(old_copy.clone(), u32::MAX).unwrap().blocks(), 0);
     let state = snapshot(&c, "pw");
     assert_eq!(state.len(), 1);
     assert_eq!((state[0].2.as_str(), state[0].3.as_deref()), ("new text", None));
-    // Unlocking erased them again: the old text is nowhere in the file in clear or decryptable.
     let s = unlock(&c, "pw").unwrap();
     assert_eq!(s.pending_purge_blocks().unwrap(), 0);
     s.lock().unwrap();
+}
+
+#[test]
+fn erase_now_holds_against_sync() {
+    use crate::session::PurgeMode;
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    s.set_purge_mode(PurgeMode::Manual).unwrap();
+    let id = s.save(None, EntryKind::Note, None, "n".into(), "secret v1".into()).unwrap();
+    s.lock().unwrap();
+    let cloud = path_of(&f, "cloud.bin");
+    c.backup_to(cloud.clone()).unwrap();
+    let s = unlock(&c, "pw").unwrap();
+    s.save(Some(id), EntryKind::Note, None, "n".into(), "v2".into()).unwrap();
+    assert_eq!(s.pending_purge_blocks().unwrap(), 1, "v1 waits in manual mode");
+    s.purge_now().unwrap();
+    // Each round: the cloud document comes in, the container goes back out.
+    for _ in 0..3 {
+        assert_eq!(c.merge_from(cloud.clone(), u32::MAX).unwrap().blocks(), 0);
+        s.reload().unwrap();
+        assert_eq!(s.pending_purge_blocks().unwrap(), 0, "erase now stays done");
+        c.backup_to(cloud.clone()).unwrap();
+    }
+    s.lock().unwrap();
+}
+
+#[test]
+fn a_closed_vault_does_not_make_the_file_grow_round_after_round() {
+    let f = Fixture::new();
+    let c = f.open();
+    two_vaults(&c);
+    drop(c);
+    let (pa, a) = device(&f, "a.bin");
+    let (pb, b) = device(&f, "b.bin");
+    let cloud = path_of(&f, "cloud.bin");
+    fs::copy(&pa, &cloud).unwrap();
+    // On A, R edits an entry (its old revision is erased at once); B never opens R.
+    let r = unlock(&a, "R").unwrap();
+    let id = r.entries().unwrap()[0].entry_id.clone();
+    r.save(Some(id), EntryKind::Note, None, "secret".into(), "edited again".into()).unwrap();
+    r.lock().unwrap();
+    let mut sizes = Vec::new();
+    for _ in 0..6 {
+        for (dev, path) in [(&a, &pa), (&b, &pb)] {
+            dev.merge_from(cloud.clone(), u32::MAX).unwrap().blocks();
+            dev.backup_to(cloud.clone()).unwrap();
+            let _ = path;
+        }
+        sizes.push(fs::metadata(&cloud).unwrap().len());
+    }
+    assert!(sizes.windows(2).skip(1).all(|w| w[0] == w[1]), "the file settles: {sizes:?}");
+    assert_eq!(titles(&unlock(&b, "R").unwrap()), ["secret"]);
+    assert_eq!(unlock(&b, "R").unwrap().entries().unwrap()[0].preview, "edited again");
+}
+
+#[test]
+fn a_block_that_left_in_a_copy_waits_in_manual_mode() {
+    use crate::session::PurgeMode;
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    s.set_purge_mode(PurgeMode::Manual).unwrap();
+    let id = s.save(None, EntryKind::Note, None, "n".into(), "draft one".into()).unwrap();
+    // Born in this session, but a backup (or a sync) takes it away: no longer invisible.
+    c.backup_to(path_of(&f, "copy.bin")).unwrap();
+    s.save(Some(id.clone()), EntryKind::Note, None, "n".into(), "draft two".into()).unwrap();
+    assert_eq!(s.pending_purge_blocks().unwrap(), 1, "the copied draft waits for erase now");
+    // A draft born after the copy is still erased at once.
+    s.save(Some(id), EntryKind::Note, None, "n".into(), "draft three".into()).unwrap();
+    assert_eq!(s.pending_purge_blocks().unwrap(), 1);
+}
+
+#[test]
+fn an_attachment_imported_again_after_its_erasure_is_stored_anew() {
+    let f = Fixture::new();
+    let c = f.open();
+    let src = create(&c, "pw");
+    let one = src.save(None, EntryKind::Note, None, "one".into(), "".into()).unwrap();
+    src.add_attachment(one, vec![3; 7000], "image/jpeg".into(), None, 0, 1, 1).unwrap();
+    let g = Fixture::new();
+    let other = g.open();
+    let export_and_import = |name: &str| {
+        let p = path_of(&f, name);
+        c.export_vault(src.clone(), p.clone(), "x".into()).unwrap();
+        let q = path_of(&g, name);
+        fs::copy(&p, &q).unwrap();
+        other.import_vault(q, "x".into(), None).unwrap();
+    };
+    export_and_import("first.bin");
+    let s = unlock(&other, "x").unwrap();
+    let e = s.entries().unwrap()[0].entry_id.clone();
+    let first = s.entry(e.clone()).unwrap().unwrap().attachments[0].attachment_id.clone();
+    s.delete(e).unwrap(); // the attachment is erased, its nonces stay in the file
+    s.lock().unwrap();
+
+    // The same picture arrives again, in another entry.
+    let two = src.save(None, EntryKind::Note, None, "two".into(), "".into()).unwrap();
+    src.add_attachment(two, vec![3; 7000], "image/jpeg".into(), None, 0, 1, 1).unwrap();
+    export_and_import("second.bin");
+    let s = unlock(&other, "x").unwrap();
+    let list = s.entries().unwrap();
+    assert_eq!(list.iter().map(|e| e.title.as_str()).collect::<Vec<_>>(), ["two"]);
+    let again = s.entry(list[0].entry_id.clone()).unwrap().unwrap().attachments[0].attachment_id.clone();
+    assert_ne!(again, first, "a fresh seed, not the erased one");
+    assert_eq!(s.attachment_data(again).unwrap(), vec![3; 7000]);
 }
 
 #[test]
@@ -846,12 +978,12 @@ fn an_edit_resolves_a_conflict_for_good() {
     s.save(Some(id.clone()), EntryKind::Note, None, "n".into(), "here".into()).unwrap();
     s.lock().unwrap();
 
-    c.merge_from(pb.clone()).unwrap();
+    c.merge_from(pb.clone(), u32::MAX).unwrap().blocks();
     assert!(snapshot(&c, "pw")[0].3.is_some(), "a conflict after the merge");
     let s = unlock(&c, "pw").unwrap();
     s.save(Some(id.clone()), EntryKind::Note, None, "n".into(), "here and there".into()).unwrap();
     s.lock().unwrap();
-    c.merge_from(pb).unwrap();
+    c.merge_from(pb, u32::MAX).unwrap().blocks();
     let state = snapshot(&c, "pw");
     assert_eq!((state[0].2.as_str(), state[0].3.as_deref()), ("here and there", None));
 }
@@ -866,7 +998,7 @@ fn a_merge_does_not_give_an_old_password_back() {
     let s = unlock(&c, "R").unwrap();
     c.change_password(s.clone(), "R".into(), "R2".into()).unwrap();
     s.lock().unwrap();
-    assert!(c.merge_from(old_copy).unwrap() > 0);
+    assert!(c.merge_from(old_copy, u32::MAX).unwrap().blocks() > 0);
     assert!(unlock(&c, "R").is_none());
     assert_eq!(titles(&unlock(&c, "R2").unwrap()), ["secret"]);
     assert_eq!(titles(&unlock(&c, "D").unwrap()), ["groceries"]);
@@ -888,8 +1020,8 @@ fn two_vaults_under_one_password_after_a_merge_become_one() {
     let (a0, b0) = (path_of(&f, "a0.bin"), path_of(&f, "b0.bin"));
     fs::copy(&pa, &a0).unwrap();
     fs::copy(&pb, &b0).unwrap();
-    a.merge_from(b0.clone()).unwrap();
-    b.merge_from(a0).unwrap();
+    a.merge_from(b0.clone(), u32::MAX).unwrap().blocks();
+    b.merge_from(a0, u32::MAX).unwrap().blocks();
 
     let both = ["written on a", "written on b"];
     let sorted = |c: &Container| {
@@ -903,7 +1035,7 @@ fn two_vaults_under_one_password_after_a_merge_become_one() {
     let salt = Heap::new(&pa).read_salt().unwrap();
     let pk = PasswordKeys::derive("same", &salt).unwrap();
     assert_eq!(blocks_of(Path::new(&pa)).iter().filter(|b| locator::matches(&pk.loc, &b[..NONCE_LEN])).count(), 1);
-    a.merge_from(b0).unwrap(); // the other KEYWRAP comes back once more
+    a.merge_from(b0, u32::MAX).unwrap().blocks(); // the other KEYWRAP comes back once more
     assert_eq!(sorted(&a), both);
     assert_eq!(snapshot(&a, "same").iter().map(|e| &e.0).collect::<Vec<_>>(), snapshot(&b, "same").iter().map(|e| &e.0).collect::<Vec<_>>());
 }
@@ -920,7 +1052,7 @@ fn an_open_session_sees_merged_entries_after_reload() {
 
     let s = unlock(&c, "pw").unwrap();
     s.save(None, EntryKind::Note, None, "here".into(), "".into()).unwrap();
-    c.merge_from(pb).unwrap();
+    c.merge_from(pb, u32::MAX).unwrap().blocks();
     assert_eq!(titles(&s), ["here"], "not before the reload");
     s.reload().unwrap();
     let mut t = titles(&s);
@@ -936,28 +1068,12 @@ fn an_open_session_sees_merged_entries_after_reload() {
 }
 
 #[test]
-fn sync_target_lives_in_the_vault() {
-    let f = Fixture::new();
-    let c = f.open();
-    two_vaults(&c);
-    let d = unlock(&c, "D").unwrap();
-    assert_eq!(d.sync_uri().unwrap(), None);
-    d.set_sync_uri(Some("content://drive/doc/1".into())).unwrap();
-    d.lock().unwrap();
-    assert_eq!(unlock(&c, "D").unwrap().sync_uri().unwrap().as_deref(), Some("content://drive/doc/1"));
-    assert_eq!(unlock(&c, "R").unwrap().sync_uri().unwrap(), None, "another vault knows nothing of it");
-    let d = unlock(&c, "D").unwrap();
-    d.set_sync_uri(None).unwrap();
-    assert_eq!(d.sync_uri().unwrap(), None);
-}
-
-#[test]
 fn merge_refuses_another_container() {
     let f = Fixture::new();
     let c = f.open();
     let g = Fixture::new();
     g.open();
-    assert!(c.merge_from(g.path.to_string_lossy().into()).is_err());
+    assert!(c.merge_from(g.path.to_string_lossy().into(), u32::MAX).is_err());
 }
 
 // ---- Indistinguishability (single snapshot) --------------------------------------------

@@ -298,17 +298,21 @@ pub(crate) struct Inner {
     session_id: Id,
     ops: HashMap<Id, Op>,
     op_blocks: HashMap<Id, Vec<u32>>,
-    /// Own PAD blocks, which "reclaim space" may remove (spec §8.3).
+    /// Own erased blocks (and PADs from before 0.4.0), which "reclaim space" may remove (spec §8.3).
     pub pad_blocks: BTreeSet<u32>,
     state: State,
     last_hlc: u64,
     /// Ops written in this session: their blocks never existed in any earlier snapshot of
     /// the file, so purging them is invisible even in `manual` mode (spec §8.2).
-    born: HashSet<Id>,
+    /// The value of [Heap::copies] at birth: once a copy left after it, the block may be
+    /// elsewhere and erasing it is no longer invisible.
+    born: HashMap<Id, u64>,
     /// Own BLOB blocks by nonce. Never decrypted on unlock; read on demand.
     blob_blocks: HashMap<Nonce, u32>,
     /// BLOB blocks written in this session (same reasoning as [Inner::born]).
-    born_blocks: HashSet<u32>,
+    born_blocks: HashMap<u32, u64>,
+    /// Nonces of own BLOB blocks already erased (spec §8.2); a re-import must not use them.
+    erased_blobs: HashSet<Nonce>,
     /// Part nonces per BLOB seed, derived once.
     nonce_cache: HashMap<Id, Vec<Nonce>>,
     /// KEYWRAPs this vault's log revokes (spec §11.4); their REVOKE ops are never purged.
@@ -371,6 +375,10 @@ impl Inner {
 
         let mut assembler = Assembler::default();
         heap.read_blocks(&meta, |i, block| {
+            if cipher.is_erased(&keys.erase, &block) {
+                pad_blocks.insert(i);
+                return;
+            }
             if let Some(frame) = cipher.open(&keys.enc, &block).and_then(|pt| Frame::decode(&pt)) {
                 if frame.kind == Kind::Op {
                     assembler.add(frame, i);
@@ -402,12 +410,14 @@ impl Inner {
             pad_blocks,
             state: State::default(),
             last_hlc,
-            born: HashSet::new(),
+            born: HashMap::new(),
             blob_blocks,
-            born_blocks: HashSet::new(),
+            born_blocks: HashMap::new(),
+            erased_blobs: HashSet::new(),
             nonce_cache: HashMap::new(),
             revoked,
         };
+        inner.forget_erased_blobs(heap, cipher)?;
         inner.recompute(heap, cipher)?;
         Ok(inner)
     }
@@ -456,13 +466,13 @@ impl Inner {
         let positions = append_shuffled(heap, batch)?;
         for (op, span) in ops.into_iter().zip(spans) {
             self.op_blocks.insert(op.op_id(), positions[span].to_vec());
-            self.born.insert(op.op_id());
+            self.born.insert(op.op_id(), heap.copies());
             self.ops.insert(op.op_id(), op);
         }
         for (k, nonce) in blob_nonces.into_iter().enumerate() {
             let at = positions[blob_start + k];
             self.blob_blocks.insert(nonce, at);
-            self.born_blocks.insert(at);
+            self.born_blocks.insert(at, heap.copies());
         }
         self.recompute(heap, cipher)
     }
@@ -655,25 +665,54 @@ impl Inner {
 
     /// Dead revisions whose purge must wait in `manual` mode. Settings revisions are never
     /// deferred: a fired wipe rule must not survive in an old one.
-    fn deferred(&self, id: &Id) -> bool {
+    fn deferred(&self, id: &Id, copies: u64) -> bool {
         self.purge_mode() == PurgeMode::Manual
-            && !self.born.contains(id)
+            && self.born.get(id) != Some(&copies)
             && self.ops.get(id).map(|o| o.entry_id() != SETTINGS_ID).unwrap_or(false)
     }
 
-    /// Overwrites blocks of replaced revisions with own PAD (spec §8.2). Returns blocks erased.
+    /// Own BLOB blocks that no operation refers to and that an earlier purge already erased:
+    /// they keep their nonce (and locator) for good, so they are told apart by the mark and
+    /// set aside instead of counting as waiting to be erased.
+    fn forget_erased_blobs(&mut self, heap: &Heap, cipher: &BlockCipher) -> Result<()> {
+        let referenced = self.blob_nonces_of(false)?;
+        let orphans: Vec<(Nonce, u32)> = self.blob_blocks.iter().filter(|(n, _)| !referenced.contains(*n)).map(|(n, at)| (*n, *at)).collect();
+        let erase = &self.keys()?.erase;
+        let mut gone = Vec::new();
+        for (n, at) in orphans {
+            if cipher.is_erased(erase, &heap.read_block(at)?) {
+                gone.push(n);
+            }
+        }
+        for n in gone {
+            if let Some(at) = self.blob_blocks.remove(&n) {
+                self.pad_blocks.insert(at);
+            }
+            self.erased_blobs.insert(n);
+        }
+        Ok(())
+    }
+
+    /// Erases blocks of replaced revisions in place, keeping their nonces (spec §8.2): a merge
+    /// with a copy that still has them then finds them here already and does not bring them
+    /// back. Blocks born after the latest copy left the device are erased at once even in
+    /// manual mode: no copy anywhere has them. Returns blocks erased.
     fn purge_dead(&mut self, heap: &Heap, cipher: &BlockCipher, everything: bool) -> Result<u32> {
-        let dead: Vec<Id> = self.state.dead.iter().filter(|id| everything || !self.deferred(id)).copied().collect();
-        let pad_loc = &self.keys.as_ref().ok_or(CoreError::Locked)?.pad_loc;
-        let mut writes = Vec::new();
+        let copies = heap.copies();
+        let dead: Vec<Id> = self.state.dead.iter().filter(|id| everything || !self.deferred(id, copies)).copied().collect();
+        let mut targets: Vec<u32> = Vec::new();
         for id in &dead {
             if let Some(blocks) = self.op_blocks.remove(id) {
-                for b in blocks {
-                    writes.push((b, cipher.pad(pad_loc)));
-                    self.pad_blocks.insert(b);
-                }
+                targets.extend(blocks);
             }
             self.ops.remove(id);
+        }
+        let erase = &self.keys.as_ref().ok_or(CoreError::Locked)?.erase;
+        let mut writes = Vec::new();
+        if !targets.is_empty() {
+            let nonces = heap.read_nonces()?;
+            self.pad_blocks.extend(targets.iter().copied());
+            writes.extend(targets.into_iter().map(|b| (b, cipher.erased(erase, &nonces[b as usize]))));
         }
         // BLOBs nobody refers to any more: removed attachments, deleted or replaced entries.
         let manual = self.purge_mode() == PurgeMode::Manual;
@@ -681,14 +720,15 @@ impl Inner {
         let orphans: Vec<(Nonce, u32)> = self
             .blob_blocks
             .iter()
-            .filter(|(n, at)| !referenced.contains(*n) && (everything || !manual || self.born_blocks.contains(at)))
+            .filter(|(n, at)| !referenced.contains(*n) && (everything || !manual || self.born_blocks.get(*at) == Some(&copies)))
             .map(|(n, at)| (*n, *at))
             .collect();
-        let pad_loc = &self.keys.as_ref().ok_or(CoreError::Locked)?.pad_loc;
+        let erase = &self.keys.as_ref().ok_or(CoreError::Locked)?.erase;
         for (n, at) in orphans {
             self.blob_blocks.remove(&n);
-            writes.push((at, cipher.pad(pad_loc)));
+            self.erased_blobs.insert(n);
             self.pad_blocks.insert(at);
+            writes.push((at, cipher.erased(erase, &n)));
         }
         heap.overwrite(&writes)?;
         Ok(writes.len() as u32)
@@ -903,26 +943,9 @@ impl Inner {
         fresh.last_hlc = fresh.last_hlc.max(self.last_hlc);
         fresh.born = std::mem::take(&mut self.born);
         fresh.born_blocks = std::mem::take(&mut self.born_blocks);
+        fresh.erased_blobs.extend(self.erased_blobs.drain());
         *self = fresh;
         Ok(())
-    }
-
-    /// The document the container syncs with (spec §10, tag 0x42): nested TLV, 0x01 = transport
-    /// (1: a document the system file picker granted, its URI in 0x02).
-    pub fn sync_uri(&self) -> Option<String> {
-        let fields = crate::tlv::parse(self.setting(T_SYNC)?, 0)?;
-        let field = |tag: u8| fields.iter().find(|f| f.tag == tag).map(|f| f.value.as_slice());
-        (field(0x01)? == [1]).then(|| String::from_utf8(field(0x02)?.to_vec()).ok()).flatten()
-    }
-
-    pub fn set_sync_uri(&mut self, heap: &Heap, cipher: &BlockCipher, uri: Option<&str>) -> Result<()> {
-        let value = uri.map(|u| {
-            let mut w = crate::tlv::Writer::default();
-            w.put_u8(0x01, 1);
-            w.put(0x02, u.as_bytes());
-            w.into_bytes()
-        });
-        self.set_setting(heap, cipher, T_SYNC, value)
     }
 
     fn setting(&self, tag: u8) -> Option<&Vec<u8>> {
@@ -998,7 +1021,7 @@ impl Inner {
         }
         self.pad_blocks = self.pad_blocks.iter().filter_map(|&b| mapping[b as usize]).collect();
         self.blob_blocks = self.blob_blocks.iter().filter_map(|(n, &b)| mapping[b as usize].map(|m| (*n, m))).collect();
-        self.born_blocks = self.born_blocks.iter().filter_map(|&b| mapping[b as usize]).collect();
+        self.born_blocks = self.born_blocks.iter().filter_map(|(&b, &e)| mapping[b as usize].map(|m| (m, e))).collect();
     }
 
     /// Copies every entry and folder of `src` into this vault (spec §11.7). An entry is taken
@@ -1078,9 +1101,23 @@ impl Inner {
         out: &mut Vec<(Nonce, Vec<u8>)>,
     ) -> Result<(Id, u32)> {
         let data = src.read_blob(src_heap, src_cipher, seed)?;
-        let new_seed = crypto::keyed_hash16_of(&self.keys()?.blob_nonce, &[b"plmp1-import-content".as_slice(), data.as_slice()]);
         let parts = Frame::part_count(data.len());
-        let nonces = self.part_nonces(&new_seed, parts)?;
+        // The same content imported, deleted and imported again: its first seed's blocks are
+        // erased but keep their nonces in the file, so the next seed in line is taken.
+        let mut round = 0u32;
+        let (new_seed, nonces) = loop {
+            let mut parts_of: Vec<&[u8]> = vec![b"plmp1-import-content", data.as_slice()];
+            let suffix = round.to_le_bytes();
+            if round > 0 {
+                parts_of.push(&suffix);
+            }
+            let s = crypto::keyed_hash16_of(&self.keys()?.blob_nonce, &parts_of);
+            let n = self.part_nonces(&s, parts)?;
+            if !n.iter().any(|x| self.erased_blobs.contains(x)) {
+                break (s, n);
+            }
+            round += 1;
+        };
         let present = nonces.iter().all(|n| self.blob_blocks.contains_key(n) || out.iter().any(|(o, _)| o == n));
         if !present {
             out.extend(self.seal_blob(cipher, new_seed, &data)?);
@@ -1109,7 +1146,7 @@ impl Inner {
             created_ms: p.created_ms as i64,
             updated_ms: (p.hlc >> 16) as i64,
             done: is_done(p),
-            has_conflict: !self.state.entries[&p.entry_id].others.is_empty(),
+            has_conflict: self.conflict(p).is_some(),
             folder_id: folder_of(p).map(|f| hex(&f)),
             color: color_of(p),
             pinned: attr(p, T_PINNED) == Some(&[1]),
@@ -1284,15 +1321,22 @@ impl Inner {
             .collect()
     }
 
+    /// A concurrent version of the head that differs from it. Two devices that pour the same
+    /// vault into the same one (spec §11.3 step 8) write equal revisions apart: no conflict.
+    fn conflict(&self, head: &PutOp) -> Option<&PutOp> {
+        self.state.entries.get(&head.entry_id)?.others.iter().find_map(|o| match self.ops.get(o) {
+            Some(Op::Put(other)) if other.title != head.title || other.body != head.body => Some(other),
+            _ => None,
+        })
+    }
+
     fn detail(&self, id: &Id) -> Option<EntryDetail> {
         let p = self.put_head(id)?;
         if p.entry_type == ENTRY_SETTINGS || p.entry_type == ENTRY_FOLDER {
             return None;
         }
-        let conflict_body = self.state.entries[id].others.first().and_then(|o| match self.ops.get(o) {
-            Some(Op::Put(other)) => Some(other.body.clone()),
-            _ => None,
-        });
+        let conflict_body = self.conflict(p).map(|o| o.body.clone());
+
         Some(EntryDetail {
             entry_id: hex(id),
             kind: EntryKind::from_type(p.entry_type),
@@ -1582,18 +1626,6 @@ impl Session {
     pub fn reload(&self) -> Result<()> {
         let heap = guard(&self.shared.heap)?;
         guard(&self.inner)?.reload(&heap, &self.shared.cipher)
-    }
-
-    /// The document this vault syncs the container with, if any (spec §7.3, §10).
-    pub fn sync_uri(&self) -> Result<Option<String>> {
-        let inner = guard(&self.inner)?;
-        inner.keys()?;
-        Ok(inner.sync_uri())
-    }
-
-    pub fn set_sync_uri(&self, uri: Option<String>) -> Result<()> {
-        let heap = guard(&self.shared.heap)?;
-        guard(&self.inner)?.set_sync_uri(&heap, &self.shared.cipher, uri.as_deref())
     }
 
     pub fn set_purge_mode(&self, mode: PurgeMode) -> Result<()> {

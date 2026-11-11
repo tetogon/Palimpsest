@@ -12,10 +12,14 @@ use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct Heap {
     path: PathBuf,
     cache: PathBuf,
+    /// How many copies of the file have left through [Heap::copy_to]: a block written before
+    /// the latest copy may exist elsewhere (spec §8.2).
+    copies: AtomicU64,
 }
 
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
@@ -27,7 +31,7 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 impl Heap {
     pub fn new(path: impl Into<PathBuf>) -> Heap {
         let path = path.into();
-        Heap { cache: sibling(&path, ".nonces"), path }
+        Heap { cache: sibling(&path, ".nonces"), path, copies: AtomicU64::new(0) }
     }
 
     pub fn exists(&self) -> bool {
@@ -175,6 +179,7 @@ impl Heap {
 
     /// A consistent copy of the heap (the caller holds the container lock).
     pub fn copy_to(&self, dest: &Path) -> io::Result<()> {
+        self.copies.fetch_add(1, Ordering::SeqCst);
         fs::copy(&self.path, dest)?;
         OpenOptions::new().write(true).open(dest)?.sync_all()
     }
@@ -186,6 +191,10 @@ impl Heap {
         OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
         let _ = fs::remove_file(&self.cache);
         fs::rename(&tmp, &self.path)
+    }
+
+    pub fn copies(&self) -> u64 {
+        self.copies.load(Ordering::SeqCst)
     }
 
     fn cache_valid(&self, n: u32) -> bool {
