@@ -115,6 +115,14 @@ impl Heap {
             return Ok(());
         }
         let n = self.block_count()?;
+        // A cache that kept an overwritten block's old nonce would show, from one copy of the
+        // two files, that a block was rewritten in place. So the cache goes before the heap is
+        // touched and comes back whole, synced, after: a crash in between leaves no cache
+        // (rebuilt from the heap), never a stale one.
+        let mut cache = if self.cache_valid(n) { Some(fs::read(&self.cache)?) } else { None };
+        if fs::remove_file(&self.cache).is_ok() {
+            self.sync_dir()?;
+        }
         let mut f = OpenOptions::new().write(true).open(&self.path)?;
         for (i, b) in writes {
             assert!(b.len() == BLOCK_SIZE && *i < n);
@@ -122,12 +130,12 @@ impl Heap {
             f.write_all(b)?;
         }
         f.sync_all()?;
-        if self.cache_valid(n) {
-            let mut c = OpenOptions::new().write(true).open(&self.cache)?;
+        if let Some(c) = cache.as_mut() {
             for (i, b) in writes {
-                c.seek(SeekFrom::Start(*i as u64 * NONCE_LEN as u64))?;
-                c.write_all(&b[..NONCE_LEN])?;
+                let at = *i as usize * NONCE_LEN;
+                c[at..at + NONCE_LEN].copy_from_slice(&b[..NONCE_LEN]);
             }
+            self.write_cache(c)?;
         }
         Ok(())
     }
@@ -161,9 +169,7 @@ impl Heap {
         }
         let _ = fs::remove_file(&self.cache);
         fs::rename(&tmp, &self.path)?;
-        let cache_tmp = sibling(&self.cache, ".tmp");
-        fs::write(&cache_tmp, &nonces)?;
-        fs::rename(&cache_tmp, &self.cache)?;
+        self.write_cache(&nonces)?;
         Ok(mapping)
     }
 
@@ -187,7 +193,6 @@ impl Heap {
     }
 
     fn rebuild_cache(&self, n: u32) -> io::Result<()> {
-        let tmp = sibling(&self.cache, ".tmp");
         let mut src = BufReader::with_capacity(1 << 16, File::open(&self.path)?);
         let mut out = Vec::with_capacity(n as usize * NONCE_LEN);
         let mut block = vec![0u8; BLOCK_SIZE];
@@ -196,7 +201,25 @@ impl Heap {
             src.read_exact(&mut block)?;
             out.extend_from_slice(&block[..NONCE_LEN]);
         }
-        fs::write(&tmp, &out)?;
+        self.write_cache(&out)
+    }
+
+    /// Makes a removal or rename in the heap's folder durable before what follows.
+    fn sync_dir(&self) -> io::Result<()> {
+        #[cfg(unix)]
+        if let Some(dir) = self.path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            File::open(dir)?.sync_all()?;
+        }
+        Ok(())
+    }
+
+    /// Replaces the cache atomically, its bytes on disk before the rename.
+    fn write_cache(&self, bytes: &[u8]) -> io::Result<()> {
+        let tmp = sibling(&self.cache, ".tmp");
+        let mut f = File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
         fs::rename(&tmp, &self.cache)
     }
 
@@ -238,6 +261,21 @@ mod tests {
 
         fs::remove_file(dir.path().join("data.bin.nonces")).unwrap();
         assert_eq!(h.read_nonces().unwrap(), scanned(&h));
+    }
+
+    #[test]
+    fn overwrite_never_leaves_a_stale_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = Heap::new(dir.path().join("data.bin"));
+        h.create(&random_bytes(BLOCK_SIZE)).unwrap();
+        h.append(&blocks(4)).unwrap();
+        h.read_nonces().unwrap();
+        h.overwrite(&[(2, random_bytes(BLOCK_SIZE))]).unwrap();
+        // The cache on disk, read without going through read_nonces, matches the heap.
+        let raw = fs::read(dir.path().join("data.bin.nonces")).unwrap();
+        let cached: Vec<Nonce> = raw.chunks_exact(NONCE_LEN).map(|c| c.try_into().unwrap()).collect();
+        assert_eq!(cached, scanned(&h));
+        assert!(!dir.path().join("data.bin.nonces.tmp").exists());
     }
 
     #[test]
