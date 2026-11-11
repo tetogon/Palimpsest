@@ -11,9 +11,11 @@ any number of vaults, and no way to tell from the file how many there are.
 
 > **Experimental. Not audited.** Palimpsest protects against a curious partner, a thief and a
 > quick border check. It does not protect against a forensic lab, spyware on the phone, or
-> someone who will keep demanding passwords until they believe you. If an adversary keeps
-> copies of the file from different moments and knows the password of a decoy vault, a
-> hidden vault can give itself away. Details are in the [threat model](docs/threat-model.md).
+> someone who will keep demanding passwords until they believe you. If an adversary gets the
+> password of a decoy vault, even one copy of the file can give a hidden vault away by how
+> much the file grew over its life; several copies from different moments do so more easily.
+> Use the decoy more than the hidden vault. Details are in the
+> [threat model](docs/threat-model.md) and the [T5 simulation](docs/t5-simulation.md).
 
 ## The idea
 

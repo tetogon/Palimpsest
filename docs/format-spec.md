@@ -542,9 +542,11 @@ export format: it would have a signature of its own.
 
 * **A copy of everything** is a byte-for-byte copy of the container under the heap lock: every
   vault, all the chaff, the same salt. Like the file itself, it does not show how many vaults
-  it holds. **Restoring** replaces the container with the copy whole (only the shape is
-  checked: a length that is a multiple of 4096 and at least two blocks); `nonces.bin` is
-  removed. Copies are not merged: that would bring back wiped and deleted vaults.
+  it holds. **Restoring** replaces the container with the copy whole, and only after a
+  password the user types opens some vault in the copy: any file of the right shape (a length
+  that is a multiple of 4096, at least two blocks) looks like a container, and replacing cannot
+  be undone. `nonces.bin` is removed. Copies are not merged: that would bring back wiped and
+  deleted vaults.
 * **Exporting a vault** makes a new container (a new salt, its own initial chaff) holding one
   vault with a **new** `V` under the export password. The head PUTs of all entries and
   folders are carried over with the same `entry_id`, `hlc`, `created_ms`, date, tags and
@@ -552,10 +554,11 @@ export format: it would have a signature of its own.
   wipe_target) are not carried over. The new `V` keeps the export password from opening the
   vault on the phone and keeps the two files' locators from matching.
 * **Attachments** are re-encrypted: the new seed =
-  `BLAKE2b-128(K_blob_nonce of the receiver, "plmp1-import" ‖ seed of the source)`. Importing
-  the same attachment into the same vault again gives the same seed and writes nothing; for
-  different vaults the seeds differ. The `att:<seed>` references in an entry's text are
-  replaced.
+  `BLAKE2b-128(K_blob_nonce of the receiver, "plmp1-import-content" ‖ content)`, and `parts`
+  is computed from the content's length, not taken from the source. Importing the same
+  attachment into the same vault again gives the same seed and writes nothing; for different
+  vaults the seeds differ; two different contents never share a seed, whatever a crafted
+  source file claims (§6.4). The `att:<seed>` references in an entry's text are replaced.
 * **Importing a vault** (from a copy or an export): the password is looked up in the file; if
   the same password opens a vault here, the entries are merged into it, otherwise a new vault
   with this password is made. An entry is taken if it is not here or its `hlc` is greater

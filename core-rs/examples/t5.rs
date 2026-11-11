@@ -200,6 +200,17 @@ fn main() {
         }
     }
 
+    // One copy of the file and the decoy password are two snapshots after all: the first is
+    // the new container (its initial chaff is a known 16–64 blocks), the interval is the
+    // file's age, and the decoy's operations carry their times and session ids.
+    println!("\n## One copy + decoy password: the interval is the file's age (manual purge)\n");
+    println!("| file age, days | hidden sessions/day | growth AUC | detection at 5% false alarms |");
+    println!("|---:|---:|---:|---:|");
+    for (days, hidden) in [(365, 0.2), (365, 1.0), (365, 3.0), (730, 1.0)] {
+        let (_, auc, tpr, _) = run(&mut r, Scenario { days, hidden_sessions_per_day: hidden, manual_purge: true, ..base });
+        println!("| {days} | {hidden} | {auc:.3} | {:.1}% |", tpr * 100.0);
+    }
+
     // The first one is the policy before 0.3.1; the production policy is among the others.
     let candidates = [
         Policy { burst_per_10k: 100, burst_min: 16, burst_max: 128 },

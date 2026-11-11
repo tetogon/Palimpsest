@@ -48,10 +48,10 @@ We say plainly that the app does **not** protect against:
 Without the password the content cannot be read. XChaCha20-Poly1305 with the vault key; the
 vault key is wrapped by a key from Argon2id(password). **Against:** A1–A4.
 
-### G2. Deniability from one snapshot (S2, S3)
+### G2. Deniability from one snapshot without a password (S2, S3)
 
-The adversary has the file and **any** subset of the passwords. They cannot tell "there is
-another vault" from "there is nothing else" better than by guessing. This rests on:
+The adversary has the file and **no** password. They cannot tell "one vault" from "several"
+better than by guessing. This rests on:
 
 * every block is 4096 bytes indistinguishable from random (a nonce with a random part and a
   PRF locator, the AEAD ciphertext, padding inside the ciphertext);
@@ -61,11 +61,19 @@ another vault" from "there is nothing else" better than by guessing. This rests 
 * the app behaves the same whatever vault is open: it does not know which one is the decoy;
 * nothing outside the vaults depends on how many there are.
 
-**Against:** A1–A3 with one snapshot.
+**Against:** A1–A3 with one snapshot and no password.
 
-### G3. Limited deniability from several snapshots
+**Not** against one snapshot together with the decoy password: that is the case of G3. The
+start of the file is known (a new container holds 16–64 blocks of chaff), and the decoy's
+operations carry their times and session ids, so one copy is two snapshots with the file's age
+as the interval. Blocks are appended in order, so a block's position also dates it. An earlier
+version of this document promised G2 with any set of passwords; that was wrong (found in an
+outside review, measured in [t5-simulation.md](t5-simulation.md), result 3).
 
-The adversary compares two snapshots and knows the decoy password. Then:
+### G3. Limited deniability from several snapshots, or one with the decoy password
+
+The adversary compares two snapshots, or one snapshot with the empty container it grew from,
+and knows the decoy password. Then:
 
 * the **appearance** of unknown blocks is covered by chaff. The protection is statistical,
   not absolute: its quality is measured by a simulation (T5);
@@ -111,12 +119,12 @@ would leave only a few runs per second.
 |---|---|---|---|
 | R1 | **Coercion goes on.** The adversary knows the app can have hidden vaults and demands "the second password". Proving there is none is impossible, and that is true for people who really have none, too | A1, A3 | Said honestly in the README. Chaff for every user makes "I have one vault" plausible, but not provable |
 | R2 | **A weak password** is guessed offline from a copy | A2, A3, A4 | A password strength meter; a phrase of 5–6 words is recommended for the real vault. The decoy's password can be simple: its opening is expected |
-| R3 | **Growth of unknown blocks** between snapshots does not look like chaff: large attachments in a hidden vault, frequent sessions with a "dead" decoy | A3×2, A4 | Measured by the T5 simulation ([t5-simulation.md](t5-simulation.md)): with 1 session a day in the hidden vault and snapshots 30 days apart, AUC 0.75 with rare large bursts of chaff (≈ 23 MB/year; 0.91 with the policy before 0.3.1), and 13% of such users caught at 5% false alarms. Advice: use the decoy more actively than the hidden vault |
+| R3 | **Growth of unknown blocks** between snapshots, or since the file was created, does not look like chaff: large attachments in a hidden vault, frequent sessions with a "dead" decoy. One copy with the decoy password is enough: a year-old file with a hidden vault as active as the decoy gives AUC 0.88, half of such users caught at 5% false alarms. A block's position in the file dates it, so growth can be read period by period | A3, A3×2, A4 | Measured by the T5 simulation ([t5-simulation.md](t5-simulation.md)): with 1 session a day in the hidden vault and snapshots 30 days apart, AUC 0.75 with rare large bursts of chaff (≈ 23 MB/year; 0.91 with the policy before 0.3.1), and 13% of such users caught at 5% false alarms. Advice: use the decoy more actively than the hidden vault |
 | R4 | **Changes to old unknown blocks** give a hidden vault away to someone with two snapshots and the decoy password: chaff never changes. Causes: purging old revisions, "Reclaim space", a duress wipe, changing the hidden vault's password | A3×2, A4 | The "erase manually" mode (`purge_mode = manual`) in the vault settings removes this channel entirely (T5: 97% → 0% within 30 days); drafts of the current session are erased without a trace. Not covered: changing the password, "Reclaim space", destroying a vault |
 | R5 | **A "dead" decoy.** A year without entries while the file grows and its modification time is fresh looks suspicious | A1, A3 | Advice in the app to really use the decoy; no reminders, because a notification is evidence by itself |
-| R6 | **Old copies and old passwords.** A backup or a copy on another device opens with an old password and holds revisions not yet erased | all | A warning when the password is changed; system backup is disabled. Planned: sync spreads the revocation of the old key |
+| R6 | **Old copies and old passwords.** A backup or a copy on another device opens with an old password and holds revisions not yet erased | all | A warning when the password is changed; system backup is disabled. A password change writes a `REVOKE_KEYWRAP` into the vault's log: when an old copy is merged back (spec §7.3), the old KEYWRAP that returns with it is refused and erased at the next unlock. The old copy itself keeps opening with the old password: that cannot be helped |
 | R7 | **Removing and rolling back blocks.** Someone with access to the file or a server can drop blocks, and the latest revision "rolls back" to an earlier one | A4 | Not covered in v1. A possible fix is a signed revision counter in the vault |
-| R8 | **Secrets in memory.** While a vault is open, keys and decrypted text are in RAM | out of scope (RAM dump) | The core in Rust: keys, the decrypted log and every entry live only there and are zeroed (`zeroize`) on lock. The JVM gets only titles and first lines for the list and the full text of **one** open entry. **Not covered:** the password in its field and the text in the editor are JVM strings and cannot be wiped; Rust memory is not protected from being swapped to disk (no mlock). Auto-lock: on screen off, after idle time, in the background |
+| R8 | **Secrets in memory.** While a vault is open, keys and decrypted text are in RAM | out of scope (RAM dump) | The core in Rust: keys, the decrypted log and every entry live only there and are zeroed (`zeroize`) on lock. The JVM gets only titles and first lines for the list and the full text of **one** open entry. **Not covered:** the password in its field and the text in the editor are JVM strings and cannot be wiped; Rust memory is not protected from being swapped to disk (no mlock). Auto-lock: on screen off, after idle time on screen, in the background after a delay the user picks (from at once to never). "Never" keeps the keys in memory until the screen goes off, the idle timer fires, the system kills the app or the phone restarts: a choice for people whose phone locks and reboots on its own schedule |
 | R9 | **The keyboard.** `IME_FLAG_NO_PERSONALIZED_LEARNING` is a request, not a ban; third-party keyboards may ignore it | A1 (cloud dictionary) | Planned: a warning on the unlock screen when the active keyboard is not on an allow list |
 | R10 | **Flash memory.** Overwriting in place does not guarantee that the physical page is destroyed | out of scope | Said as it is; the protection is cryptographic (the key is out of reach without the password) |
 | R11 | **A duress wipe as evidence.** An adversary who copied the file before the password was typed sees that data was destroyed. In some countries this is a crime (obstruction, destroying evidence) | A3 | Off by default; an explicit warning when it is set; it is no protection against a copy taken beforehand |

@@ -82,13 +82,36 @@ holds up best as the snapshots get further apart and the hidden vault gets busie
 reaches indistinguishability (AUC 0.5) for an active hidden vault: any chaff without a
 secret, which cannot be kept outside the vaults, averages out over time.
 
+## Result 3: one copy and the decoy password are two snapshots too
+
+One copy is enough for the growth detector once the decoy password is known. The first
+"snapshot" is the new container, whose content is known (16–64 blocks of chaff); the interval
+is the file's age; the decoy's operations carry their times and session ids, so the adversary
+knows its activity over the whole life of the file. Same model, manual erasing:
+
+| file age, days | hidden sessions a day | growth AUC | caught at 5% false |
+|---:|---:|---:|---:|
+| 365 | 0.2 | 0.60 | 10% |
+| 365 | 1 | 0.88 | 49% |
+| 365 | 3 | 1.00 | 99% |
+| 730 | 1 | 0.95 | 75% |
+
+This model is optimistic for the user: it only counts blocks. Blocks are appended at the end
+and shuffled only within one batch, so a block's position in the file follows time. The decoy's
+dated blocks mark the file out into periods, and the growth of unknown blocks can be read
+period by period; a photo in a hidden vault shows as a dated jump. An earlier version of this
+document and of the threat model promised deniability from one snapshot with any set of
+passwords. That holds only for a copy **without** a password (T4); this result was pointed out
+in an outside review.
+
 ## What this means for the user
 
-* Against **one** snapshot (an ordinary check, theft) deniability holds: see the
-  indistinguishability test T4.
-* Against **two** snapshots and the decoy password:
+* Against **one** copy **without** a password (theft, a copy taken before you typed
+  anything) deniability holds: see the indistinguishability test T4.
+* Against one copy **with** the decoy password, and against two copies:
   * manual erasing is a must for a hidden vault;
-  * the decoy should be used more actively than the hidden vault;
-  * the further apart the snapshots, the worse.
-* This is a limit of every hidden-volume scheme (VeraCrypt and others), not only this one.
-  The README and the threat model say so plainly.
+  * the decoy should be used more actively than the hidden vault, over the file's whole life;
+  * the older the file (or the further apart the copies), the worse;
+  * large attachments in a hidden vault are the strongest signal.
+* This is a limit of every hidden-volume scheme with a growing file (in VeraCrypt the same
+  adversary compares sectors instead). The README and the threat model say so plainly.
