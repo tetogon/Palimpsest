@@ -873,6 +873,42 @@ fn a_merge_does_not_give_an_old_password_back() {
 }
 
 #[test]
+fn two_vaults_under_one_password_after_a_merge_become_one() {
+    let f = Fixture::new();
+    f.open();
+    // Two devices start from one container and each makes a vault with the same password.
+    let (pa, a) = device(&f, "a.bin");
+    let (pb, b) = device(&f, "b.bin");
+    let sa = create(&a, "same");
+    sa.save(None, EntryKind::Note, None, "written on a".into(), "".into()).unwrap();
+    sa.lock().unwrap();
+    let sb = create(&b, "same");
+    sb.save(None, EntryKind::Note, None, "written on b".into(), "".into()).unwrap();
+    sb.lock().unwrap();
+    let (a0, b0) = (path_of(&f, "a0.bin"), path_of(&f, "b0.bin"));
+    fs::copy(&pa, &a0).unwrap();
+    fs::copy(&pb, &b0).unwrap();
+    a.merge_from(b0.clone()).unwrap();
+    b.merge_from(a0).unwrap();
+
+    let both = ["written on a", "written on b"];
+    let sorted = |c: &Container| {
+        let mut t = titles(&unlock(c, "same").unwrap());
+        t.sort();
+        t
+    };
+    assert_eq!(sorted(&a), both);
+    assert_eq!(sorted(&b), both, "both devices keep the same vault");
+    // Done once: the password now opens a single vault, and nothing is copied twice.
+    let salt = Heap::new(&pa).read_salt().unwrap();
+    let pk = PasswordKeys::derive("same", &salt).unwrap();
+    assert_eq!(blocks_of(Path::new(&pa)).iter().filter(|b| locator::matches(&pk.loc, &b[..NONCE_LEN])).count(), 1);
+    a.merge_from(b0).unwrap(); // the other KEYWRAP comes back once more
+    assert_eq!(sorted(&a), both);
+    assert_eq!(snapshot(&a, "same").iter().map(|e| &e.0).collect::<Vec<_>>(), snapshot(&b, "same").iter().map(|e| &e.0).collect::<Vec<_>>());
+}
+
+#[test]
 fn merge_refuses_another_container() {
     let f = Fixture::new();
     let c = f.open();

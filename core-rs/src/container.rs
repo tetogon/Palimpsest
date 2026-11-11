@@ -242,18 +242,45 @@ impl Container {
         let heap = guard(&self.shared.heap)?;
         let cipher = &self.shared.cipher;
         let nonces = heap.read_nonces()?;
-        let found = find_keywraps(&heap, cipher, &pk, &nonces, false)?;
-        let Some(first) = found.first() else { return Ok(None) };
-        let mut inner = Inner::load(&heap, cipher, first.vault_id, first.block_index, first.v.duplicate(), &nonces)?;
-        // A revoked KEYWRAP brought back by a merge or an old block (spec §11.3 step 7) is
-        // erased; the password opens the vault only through one that is not revoked.
-        let (revoked, live): (Vec<&Keywrap>, Vec<&Keywrap>) =
-            found.iter().filter(|k| k.vault_id == inner.vault_id).partition(|k| inner.revoked.contains(&k.keywrap_id));
-        if !revoked.is_empty() {
-            heap.overwrite(&revoked.iter().map(|k| (k.block_index, cipher.chaff())).collect::<Vec<_>>())?;
+        let mut found = find_keywraps(&heap, cipher, &pk, &nonces, false)?;
+        // Normally one vault. Two copies that each made a vault with this password and were
+        // then merged give two: the one with the smaller vault_id stays, on every device alike,
+        // and the others are poured into it below.
+        found.sort_by_key(|k| (k.vault_id, k.block_index));
+        let mut vaults: Vec<Vec<Keywrap>> = Vec::new();
+        for k in found {
+            match vaults.last_mut() {
+                Some(group) if group[0].vault_id == k.vault_id => group.push(k),
+                _ => vaults.push(vec![k]),
+            }
         }
-        let Some(kw) = live.first() else { return Ok(None) };
-        inner.keywrap_index = kw.block_index;
+        let mut erase = Vec::new();
+        let mut inner: Option<Inner> = None;
+        for group in vaults {
+            let mut loaded = Inner::load(&heap, cipher, group[0].vault_id, group[0].block_index, group[0].v.duplicate(), &nonces)?;
+            // A revoked KEYWRAP brought back by a merge or an old block (spec §11.3 step 7) is
+            // erased; the password opens a vault only through one that is not revoked.
+            let (revoked, live): (Vec<&Keywrap>, Vec<&Keywrap>) = group.iter().partition(|k| loaded.revoked.contains(&k.keywrap_id));
+            erase.extend(revoked.iter().map(|k| k.block_index));
+            let Some(kw) = live.first() else { continue };
+            match inner.as_mut() {
+                None => {
+                    loaded.keywrap_index = kw.block_index;
+                    inner = Some(loaded);
+                }
+                Some(main) => {
+                    // Entries newer than here come over (the import of spec §11.7), then this
+                    // password stops opening the other vault. Its other blocks stay as they are:
+                    // unknown blocks, like any other vault's.
+                    main.import_from(&heap, cipher, &mut loaded, &heap, cipher)?;
+                    erase.extend(live.iter().map(|k| k.block_index));
+                }
+            }
+        }
+        if !erase.is_empty() {
+            heap.overwrite(&erase.iter().map(|&i| (i, cipher.chaff())).collect::<Vec<_>>())?;
+        }
+        let Some(mut inner) = inner else { return Ok(None) };
         if let Some(target) = inner.wipe_target() {
             shred(&heap, cipher, &target.iter().collect::<Vec<_>>(), &[])?;
             inner.set_wipe_target(&heap, cipher, None)?;
