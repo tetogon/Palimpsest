@@ -285,7 +285,7 @@ private fun CreateVaultScreen(
 
 // ---- Settings: app first, this vault below -------------------------------------------------
 
-private enum class SettingsDialog { IDLE, BACKGROUND, CHANGE_PASSWORD, WIPE, RECLAIM, DELETE_VAULT, RESTORE, IMPORT, EXPORT }
+private enum class SettingsDialog { IDLE, BACKGROUND, CHANGE_PASSWORD, WIPE, RECLAIM, DELETE_VAULT, RESTORE, RESTORE_PASSWORD, IMPORT, EXPORT }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -308,7 +308,13 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
     val stamp = remember { java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) }
     val binary = "application/octet-stream"
     val backupTo = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(binary)) { uri -> uri?.let(vm::backup) }
-    val restoreFrom = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(vm::restore) }
+    var restoreUri by remember { mutableStateOf<Uri?>(null) }
+    val restoreFrom = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            restoreUri = uri
+            dialog = SettingsDialog.RESTORE_PASSWORD
+        }
+    }
     var importUri by remember { mutableStateOf<Uri?>(null) }
     val importFrom = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -448,6 +454,16 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
             close()
             restoreFrom.launch(arrayOf("*/*"))
         }, onDismiss = close)
+        // Replacing cannot be undone: only a backup the password opens is taken.
+        SettingsDialog.RESTORE_PASSWORD -> ImportDialog(
+            title = R.string.restore_password_title, hint = R.string.restore_password_hint, button = R.string.restore_button, icon = RestoreIcon,
+            onSubmit = { pw ->
+                restoreUri?.let { vm.restore(it, pw) }
+                restoreUri = null
+                close()
+            },
+            onDismiss = { restoreUri = null; close() },
+        )
         SettingsDialog.IMPORT -> ImportDialog(onSubmit = { pw ->
             importUri?.let { vm.importVault(it, pw) }
             importUri = null
@@ -462,8 +478,12 @@ private fun SettingsScreen(ui: UiState, withVault: Boolean, vm: AppViewModel, on
 private fun idleLabel(minutes: Int) = if (minutes == 0) stringResource(R.string.never) else stringResource(R.string.minutes, minutes)
 
 @Composable
-private fun backgroundLabel(seconds: Int) =
-    if (seconds == 0) stringResource(R.string.immediately) else stringResource(R.string.minutes, seconds / 60)
+private fun backgroundLabel(seconds: Int) = when {
+    seconds == AppSettings.NEVER -> stringResource(R.string.never)
+    seconds == 0 -> stringResource(R.string.immediately)
+    seconds >= 3600 -> stringResource(R.string.hours, seconds / 3600)
+    else -> stringResource(R.string.minutes, seconds / 60)
+}
 
 @Composable
 private fun GroupTitle(@StringRes text: Int) {
@@ -595,20 +615,27 @@ private fun ChangePasswordDialog(onSubmit: (String, String, String) -> Unit, onD
 }
 
 @Composable
-private fun ImportDialog(onSubmit: (String) -> Unit, onDismiss: () -> Unit) {
+private fun ImportDialog(
+    onSubmit: (String) -> Unit,
+    onDismiss: () -> Unit,
+    @StringRes title: Int = R.string.import_password_title,
+    @StringRes hint: Int = R.string.import_password_hint,
+    @StringRes button: Int = R.string.import_button,
+    icon: ImageVector = DownloadIcon,
+) {
     var password by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        icon = { Icon(DownloadIcon, null) },
-        title = { Text(stringResource(R.string.import_password_title)) },
+        icon = { Icon(icon, null) },
+        title = { Text(stringResource(title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 PasswordBox(password, { password = it }, R.string.password)
-                Text(stringResource(R.string.import_password_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSubmit(password) }, enabled = password.isNotEmpty()) { Text(stringResource(R.string.import_button)) }
+            TextButton(onClick = { onSubmit(password) }, enabled = password.isNotEmpty()) { Text(stringResource(button)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )

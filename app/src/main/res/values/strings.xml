@@ -190,6 +190,7 @@
     <string name="never">Never</string>
     <string name="immediately">Immediately</string>
     <string name="minutes">%d min</string>
+    <string name="hours">%d h</string>
     <string name="clipboard_title">Clipboard</string>
     <string name="clipboard_hint">Text copied from an entry is marked sensitive: Android hides it from the copy preview and keyboards should not keep it in clipboard history. Share, Translate and web search are removed from the selection menu.</string>
     <string name="clipboard_clear">Clear clipboard after 1 minute</string>
@@ -247,6 +248,9 @@
     <string name="import_nothing">Nothing new in the file</string>
     <string name="import_not_found">No vault in the file opens with this password</string>
     <string name="not_a_backup">This file is not a backup</string>
+    <string name="restore_password_title">Password of a vault in the backup</string>
+    <string name="restore_password_hint">Any vault\'s password will do. It proves the file is your backup before everything here is replaced; nothing changes if it opens nothing.</string>
+    <string name="restore_not_found">No vault in the backup opens with this password. Nothing was changed.</string>
     <string name="embed_remove">Move to attachments</string>
     <string name="strip_drop_here">Drop here to take it out of the text</string>
     <string name="strip_drag_hint">Hold a photo and drag it into the text</string>

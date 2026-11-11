@@ -201,6 +201,7 @@
     <string name="never">Никогда</string>
     <string name="immediately">Сразу</string>
     <string name="minutes">%d мин</string>
+    <string name="hours">%d ч</string>
     <string name="clipboard_title">Буфер обмена</string>
     <string name="clipboard_hint">Текст, скопированный из записи, помечается как конфиденциальный: Android не показывает его в превью копирования, а клавиатуры не должны сохранять его в истории буфера. Пункты «Поделиться», «Перевести» и поиск убраны из меню выделения.</string>
     <string name="clipboard_clear">Очищать буфер через 1 минуту</string>
@@ -258,6 +259,9 @@
     <string name="import_nothing">В файле нет ничего нового</string>
     <string name="import_not_found">Ни одно хранилище в файле не открывается этим паролем</string>
     <string name="not_a_backup">Этот файл — не резервная копия</string>
+    <string name="restore_password_title">Пароль хранилища в копии</string>
+    <string name="restore_password_hint">Подойдёт пароль любого хранилища. Он подтверждает, что это ваша копия, прежде чем всё здесь заменится; если он ничего не открывает, ничего не изменится.</string>
+    <string name="restore_not_found">Ни одно хранилище в копии не открывается этим паролем. Ничего не изменилось.</string>
     <string name="embed_remove">Убрать во вложения</string>
     <string name="strip_drop_here">Отпустите здесь, чтобы убрать из текста</string>
     <string name="strip_drag_hint">Удерживайте фото и перетащите его в текст</string>

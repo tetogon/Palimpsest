@@ -20,7 +20,7 @@ class AppSettings(context: Context) {
         val lockOnScreenOff: Boolean = true,
         /** 0 = never. */
         val idleLockMinutes: Int = 5,
-        /** 0 = immediately. */
+        /** 0 = immediately, [NEVER] = only on screen off, idle or by hand. */
         val backgroundLockSeconds: Int = 60,
         /** Clear the clipboard [ClipboardGuard.CLEAR_AFTER_MS] after copying from an entry. */
         val clearClipboard: Boolean = true,
@@ -74,7 +74,8 @@ class AppSettings(context: Context) {
 
     companion object {
         val IDLE_OPTIONS = listOf(1, 5, 15, 0)
-        val BACKGROUND_OPTIONS = listOf(0, 60, 300)
+        const val NEVER = -1
+        val BACKGROUND_OPTIONS = listOf(0, 60, 300, 900, 3600, 4 * 3600, 24 * 3600, NEVER)
         private const val THEME = "theme"
         private const val SORT = "sort"
         private const val SCREEN_OFF = "lock_on_screen_off"

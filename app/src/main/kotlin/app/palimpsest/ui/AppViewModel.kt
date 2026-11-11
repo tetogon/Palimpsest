@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class Draft(
@@ -149,7 +150,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val player = VoicePlayer()
 
     init {
-        repo.beforeLock = { session -> draft()?.let { saveDraft(session, it) } }
+        repo.beforeLock = { session -> saveDraft(session) }
+        repo.onBackground = { session -> autosave(session) }
+        viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(AUTOSAVE_MS)
+                repo.session.value?.let { s -> runCatching { autosave(s) } }
+            }
+        }
         viewModelScope.launch(Dispatchers.IO) {
             repo.session.collect { session ->
                 if (session == null) {
@@ -218,7 +226,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             Screen.Graph -> Back.Graph
             else -> null
         }
-        draft()?.let { saveDraft(session, it) }
+        saveDraft(session)
         refresh(session)
         open(session, id, back)
     }
@@ -631,7 +639,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         withMain { stopVoice() }
         val session = repo.session.value ?: return@work
         val back = (_ui.value.screen as? Screen.Editor)?.back
-        draft()?.let { saveDraft(session, it) }
+        saveDraft(session)
         when (back) {
             is Back.Entry -> {
                 refresh(session)
@@ -744,12 +752,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         done(R.string.backup_done)
     }
 
-    fun restore(uri: Uri) = work {
-        val ok = runCatching { resolver.openInputStream(uri)?.use(repo::restoreFrom) ?: error("no input") }
-        if (ok.isFailure) {
-            fail(if (ok.exceptionOrNull() is CoreException.Invalid) R.string.not_a_backup else R.string.error_generic)
-        } else {
-            done(R.string.restore_done)
+    fun restore(uri: Uri, password: String) {
+        if (password.isEmpty()) return fail(R.string.password_empty)
+        work {
+            val ok = runCatching { resolver.openInputStream(uri)?.use { repo.restoreFrom(it, password) } ?: error("no input") }
+            when {
+                ok.isFailure -> fail(if (ok.exceptionOrNull() is CoreException.Invalid) R.string.not_a_backup else R.string.error_generic)
+                ok.getOrNull() == false -> slowFail(R.string.restore_not_found)
+                else -> done(R.string.restore_done)
+            }
         }
     }
 
@@ -796,8 +807,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Text revision if it changed, then each attribute; unchanged ones are no-ops in the core. */
-    private fun saveDraft(session: Session, d: Draft) {
+    /** Saves of the open draft never overlap: two at once would make a new entry twice. */
+    private val saveLock = Any()
+
+    /**
+     * The open draft: text revision if it changed, then each attribute; unchanged ones are
+     * no-ops in the core.
+     */
+    private fun saveDraft(session: Session): Unit = synchronized(saveLock) {
+        val d = draft() ?: return
         if (d.entryId == null && d.empty) return
         val id = if (d.dirty || d.entryId == null) {
             session.save(d.entryId, d.kind, d.folderId, d.title, d.body)
@@ -811,6 +829,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         session.setColor(ids, d.color)
         session.moveToFolder(ids, d.folderId)
         session.setTags(id, d.tags)
+        markSaved(d, id)
+    }
+
+    /**
+     * The text of the open draft, while the editor stays open: when the app goes to the
+     * background (the system may kill it there) and every [AUTOSAVE_MS] while it has changes.
+     * Not more often: every save is a commit with its own portion of chaff.
+     */
+    private fun autosave(session: Session): Unit = synchronized(saveLock) {
+        val d = draft() ?: return
+        if (!d.dirty && d.entryId != null) return
+        if (d.entryId == null && d.empty) return
+        markSaved(d, session.save(d.entryId, d.kind, d.folderId, d.title, d.body))
+    }
+
+    /** The saved text is [d]'s; typing that happened meanwhile stays unsaved. */
+    private fun markSaved(d: Draft, id: String) = editDraft { now ->
+        if (now.entryId != d.entryId) now else now.copy(entryId = id, savedTitle = d.title, savedBody = d.body)
     }
 
 
@@ -866,6 +902,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val WRONG_PASSWORD_DELAY_MS = 1_000L
         private const val EMBED_SIDE = 1440
+        const val AUTOSAVE_MS = 120_000L
     }
 
     private fun work(block: () -> Unit) {

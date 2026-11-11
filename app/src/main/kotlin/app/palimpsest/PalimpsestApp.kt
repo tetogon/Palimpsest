@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -62,6 +63,8 @@ class PalimpsestApp : Application() {
             override fun onStop(owner: LifecycleOwner) {
                 val seconds = settings.values.value.backgroundLockSeconds
                 backgroundLock = scope.launch {
+                    repository.flush()
+                    if (seconds == AppSettings.NEVER) return@launch
                     delay(seconds * 1000L)
                     repository.lock()
                 }
@@ -86,13 +89,18 @@ class PalimpsestApp : Application() {
         )
     }
 
+    /**
+     * Inactivity while the app is on screen. In the background the background setting decides,
+     * so "never" there is not undone by this timer; coming back counts as activity.
+     */
     private fun lockWhenIdle() {
         scope.launch {
             while (true) {
                 delay(5_000)
                 val minutes = settings.values.value.idleLockMinutes
                 val idle = SystemClock.elapsedRealtime() - repository.lastActivity
-                if (minutes > 0 && repository.session.value != null && idle > minutes * 60_000L) repository.lock()
+                val onScreen = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+                if (minutes > 0 && onScreen && repository.session.value != null && idle > minutes * 60_000L) repository.lock()
             }
         }
     }

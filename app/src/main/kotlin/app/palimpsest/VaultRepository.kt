@@ -6,6 +6,7 @@ import app.palimpsest.ffi.ChangePasswordResult
 import app.palimpsest.ffi.Container
 import app.palimpsest.ffi.ImportResult
 import app.palimpsest.ffi.Session
+import app.palimpsest.ffi.backupOpens
 import app.palimpsest.ffi.restoreContainer
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +38,16 @@ class VaultRepository(private val file: File, private val transfers: File) {
     /** Called right before locking so unsaved editor text is committed, not lost. */
     @Volatile
     var beforeLock: ((Session) -> Unit)? = null
+
+    /** Called when the app goes to the background, to save the editor's text (see [flush]). */
+    @Volatile
+    var onBackground: ((Session) -> Unit)? = null
+
+    /** The app left the foreground, where the system may kill it: save what is unsaved. */
+    fun flush() {
+        val s = _session.value ?: return
+        runCatching { onBackground?.invoke(s) }
+    }
 
     /** Called after the vault is locked or deleted (clears our clipboard content). */
     @Volatile
@@ -111,19 +122,21 @@ class VaultRepository(private val file: File, private val transfers: File) {
     }
 
     /**
-     * Replaces the container with a backup. The open vault is locked first. Throws
+     * Replaces the container with a backup, if [password] opens a vault in it; false, with
+     * nothing locked or replaced, otherwise. The open vault is locked first. Throws
      * [app.palimpsest.ffi.CoreException.Invalid] if the file cannot be a container.
      */
-    fun restoreFrom(input: InputStream) {
+    fun restoreFrom(input: InputStream, password: String): Boolean {
         val dir = scratch()
         try {
             val copy = File(dir, "restore.bin")
             copy.outputStream().use { input.copyTo(it) }
+            if (!backupOpens(copy.absolutePath, password)) return false
             lock()
             synchronized(this) {
                 opened?.close()
                 opened = null
-                restoreContainer(file.absolutePath, copy.absolutePath)
+                return restoreContainer(file.absolutePath, copy.absolutePath, password)
             }
         } finally {
             dir.deleteRecursively()
