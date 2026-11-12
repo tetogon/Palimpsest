@@ -313,6 +313,9 @@ pub(crate) struct Inner {
     born_blocks: HashMap<u32, u64>,
     /// Nonces of own BLOB blocks already erased (spec §8.2); a re-import must not use them.
     erased_blobs: HashSet<Nonce>,
+    /// Blocks of referenced attachments found erased at load and turned into chaff (see
+    /// [Inner::heal_erased_attachments]): a merge right after brings the real ones.
+    pub healed: u32,
     /// Part nonces per BLOB seed, derived once.
     nonce_cache: HashMap<Id, Vec<Nonce>>,
     /// KEYWRAPs this vault's log revokes (spec §11.4); their REVOKE ops are never purged.
@@ -414,10 +417,12 @@ impl Inner {
             blob_blocks,
             born_blocks: HashMap::new(),
             erased_blobs: HashSet::new(),
+            healed: 0,
             nonce_cache: HashMap::new(),
             revoked,
         };
         inner.forget_erased_blobs(heap, cipher)?;
+        inner.healed = inner.heal_erased_attachments(heap, cipher)?;
         inner.recompute(heap, cipher)?;
         Ok(inner)
     }
@@ -693,6 +698,41 @@ impl Inner {
         Ok(())
     }
 
+    /// An attachment this device erased when nothing referred to it, referred to again by a
+    /// revision from another device (one phone removed the photo while another edited the
+    /// text). Its erased blocks keep their nonces, so merging would never bring the real ones:
+    /// they become plain chaff with fresh nonces instead, and the next merge takes the real
+    /// blocks. An attachment is erased whole, so its first part tells: one read per attachment.
+    fn heal_erased_attachments(&mut self, heap: &Heap, cipher: &BlockCipher) -> Result<u32> {
+        let seeds: Vec<(Id, u32)> = self
+            .ops
+            .values()
+            .filter_map(|o| match o {
+                Op::Put(p) => Some(attachment::refs(&p.unknown).flat_map(|r| r.blobs().collect::<Vec<_>>()).collect::<Vec<_>>()),
+                Op::Delete(_) => None,
+            })
+            .flatten()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let mut writes = Vec::new();
+        for (seed, parts) in seeds {
+            let nonces = self.part_nonces(&seed, parts)?;
+            let Some(&first) = nonces.first().and_then(|n| self.blob_blocks.get(n)) else { continue };
+            if !cipher.is_erased(&self.keys()?.erase, &heap.read_block(first)?) {
+                continue;
+            }
+            for n in &nonces {
+                self.erased_blobs.remove(n);
+                if let Some(at) = self.blob_blocks.remove(n) {
+                    writes.push((at, cipher.chaff()));
+                }
+            }
+        }
+        heap.overwrite(&writes)?;
+        Ok(writes.len() as u32)
+    }
+
     /// Erases blocks of replaced revisions in place, keeping their nonces (spec §8.2): a merge
     /// with a copy that still has them then finds them here already and does not bring them
     /// back. Blocks born after the latest copy left the device are erased at once even in
@@ -934,8 +974,9 @@ impl Inner {
     }
 
     /// Reads the vault again from the file, after a merge or a sync brought in blocks from
-    /// another copy (spec §7.3). The session goes on as the same session.
-    pub fn reload(&mut self, heap: &Heap, cipher: &BlockCipher) -> Result<()> {
+    /// another copy (spec §7.3). The session goes on as the same session. Returns
+    /// [Inner::healed]: when it is not 0, merge the same copy again.
+    pub fn reload(&mut self, heap: &Heap, cipher: &BlockCipher) -> Result<u32> {
         let v = self.v.as_ref().ok_or(CoreError::Locked)?.duplicate();
         let nonces = heap.read_nonces()?;
         let mut fresh = Inner::load(heap, cipher, self.vault_id, self.keywrap_index, v, &nonces)?;
@@ -943,9 +984,10 @@ impl Inner {
         fresh.last_hlc = fresh.last_hlc.max(self.last_hlc);
         fresh.born = std::mem::take(&mut self.born);
         fresh.born_blocks = std::mem::take(&mut self.born_blocks);
-        fresh.erased_blobs.extend(self.erased_blobs.drain());
+        fresh.erased_blobs.extend(self.erased_blobs.drain().filter(|n| !fresh.blob_blocks.contains_key(n)));
+        let healed = fresh.healed;
         *self = fresh;
-        Ok(())
+        Ok(healed)
     }
 
     fn setting(&self, tag: u8) -> Option<&Vec<u8>> {
@@ -1623,7 +1665,9 @@ impl Session {
     }
 
     /// Re-reads the vault after [crate::Container::merge_from] added blocks to the file.
-    pub fn reload(&self) -> Result<()> {
+    /// Not 0: attachments erased here are referred to again; merge the same copy once more to
+    /// get their blocks.
+    pub fn reload(&self) -> Result<u32> {
         let heap = guard(&self.shared.heap)?;
         guard(&self.inner)?.reload(&heap, &self.shared.cipher)
     }

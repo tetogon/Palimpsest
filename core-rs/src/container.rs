@@ -191,15 +191,17 @@ fn find_keywraps(heap: &Heap, cipher: &BlockCipher, pk: &PasswordKeys, nonces: &
     Ok(out)
 }
 
-/// Overwrites in place, with fresh random bytes indistinguishable from chaff, every block
-/// matching any of `locators` plus `extra`. File size does not change.
+/// Overwrites in place every block matching any of `locators`, plus `extra`, with what
+/// [BlockCipher::shredded] leaves: indistinguishable from chaff, no longer matching any of the
+/// vault's locators, yet counted by a merge as already here, so a sync cannot bring the vault
+/// back on this device (spec §8.2, §10.1). File size does not change.
 fn shred(heap: &Heap, cipher: &BlockCipher, locators: &[&Key], extra: &[u32]) -> Result<()> {
     let nonces = heap.read_nonces()?;
     let mut targets: BTreeSet<u32> = (0..nonces.len() as u32)
         .filter(|&i| locators.iter().any(|k| locator::matches(k, &nonces[i as usize])))
         .collect();
     targets.extend(extra);
-    let writes: Vec<(u32, Vec<u8>)> = targets.into_iter().map(|i| (i, cipher.chaff())).collect();
+    let writes: Vec<(u32, Vec<u8>)> = targets.into_iter().map(|i| (i, cipher.shredded(&nonces[i as usize]))).collect();
     heap.overwrite(&writes)?;
     Ok(())
 }
@@ -289,7 +291,7 @@ impl Container {
             }
         }
         if !erase.is_empty() {
-            heap.overwrite(&erase.iter().map(|&i| (i, cipher.chaff())).collect::<Vec<_>>())?;
+            heap.overwrite(&erase.iter().map(|&i| (i, cipher.shredded(&nonces[i as usize]))).collect::<Vec<_>>())?;
         }
         let Some(mut inner) = inner else { return Ok(None) };
         if let Some(target) = inner.wipe_target() {
@@ -406,7 +408,7 @@ impl Container {
         }
         let block = keywrap_block(cipher, &new_pk, &inner.vault_id, &kw.v);
         let positions = inner.append_with_revoke(&heap, cipher, kw.keywrap_id, vec![block])?;
-        heap.overwrite(&[(kw.block_index, cipher.chaff())])?;
+        heap.overwrite(&[(kw.block_index, cipher.shredded(&nonces[kw.block_index as usize]))])?;
         inner.keywrap_index = positions[0];
         Ok(ChangePasswordResult::Changed)
     }
@@ -483,11 +485,13 @@ impl Container {
             return Err(CoreError::Invalid("not a copy of this container".into()));
         }
         let heap = guard(&self.shared.heap)?;
-        let here: std::collections::HashSet<Nonce> = heap.read_nonces()?.into_iter().collect();
+        // A block is known by the random part of its nonce: erasing and shredding keep it.
+        let r = |n: &Nonce| -> [u8; R_LEN] { n[..R_LEN].try_into().expect("16 bytes") };
+        let here: std::collections::HashSet<[u8; R_LEN]> = heap.read_nonces()?.iter().map(r).collect();
         let theirs = src.read_nonces()?;
         let mut seen = std::collections::HashSet::new();
         let missing: Vec<u32> = (0..theirs.len() as u32)
-            .filter(|&i| !here.contains(&theirs[i as usize]) && seen.insert(theirs[i as usize]))
+            .filter(|&i| !here.contains(&r(&theirs[i as usize])) && seen.insert(r(&theirs[i as usize])))
             .collect();
         let n = missing.len() as u32;
         if n > max_blocks {

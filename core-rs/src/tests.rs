@@ -998,7 +998,8 @@ fn a_merge_does_not_give_an_old_password_back() {
     let s = unlock(&c, "R").unwrap();
     c.change_password(s.clone(), "R".into(), "R2".into()).unwrap();
     s.lock().unwrap();
-    assert!(c.merge_from(old_copy, u32::MAX).unwrap().blocks() > 0);
+    // The old KEYWRAP was shredded keeping its nonce's random part: the old copy adds nothing.
+    assert_eq!(c.merge_from(old_copy, u32::MAX).unwrap().blocks(), 0);
     assert!(unlock(&c, "R").is_none());
     assert_eq!(titles(&unlock(&c, "R2").unwrap()), ["secret"]);
     assert_eq!(titles(&unlock(&c, "D").unwrap()), ["groceries"]);
@@ -1067,6 +1068,91 @@ fn an_open_session_sees_merged_entries_after_reload() {
     assert_eq!(t, ["after", "from b", "here"]);
 }
 
+#[test]
+fn a_photo_removed_here_and_kept_by_an_edit_elsewhere_comes_back() {
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    let id = s.save(None, EntryKind::Note, None, "n".into(), "text".into()).unwrap();
+    let photo = s.add_attachment(id.clone(), vec![9; 9000], "image/jpeg".into(), None, 0, 1, 1).unwrap().attachment_id;
+    s.lock().unwrap();
+    let (pb, b) = device(&f, "b.bin");
+    // Here the photo goes (its blocks are erased at once); there the text is edited later.
+    let s = unlock(&c, "pw").unwrap();
+    s.remove_attachment(id.clone(), photo.clone()).unwrap();
+    let sb = unlock(&b, "pw").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    sb.save(Some(id.clone()), EntryKind::Note, None, "n".into(), "text, edited there".into()).unwrap();
+    sb.lock().unwrap();
+
+    c.merge_from(pb.clone(), u32::MAX).unwrap().blocks();
+    // The later edit refers to the photo, whose blocks here are erased: reloading turns them
+    // into chaff, and merging the same copy again brings the real ones.
+    assert!(s.reload().unwrap() > 0, "the erased parts were found");
+    c.merge_from(pb, u32::MAX).unwrap().blocks();
+    assert_eq!(s.reload().unwrap(), 0);
+    let e = s.entry(id).unwrap().unwrap();
+    assert_eq!(e.body, "text, edited there");
+    assert_eq!(s.attachment_data(photo).unwrap(), vec![9; 9000]);
+}
+
+#[test]
+fn an_entry_deleted_here_and_edited_elsewhere_keeps_its_photo() {
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    let id = s.save(None, EntryKind::Note, None, "n".into(), "text".into()).unwrap();
+    let photo = s.add_attachment(id.clone(), vec![4; 6000], "image/jpeg".into(), None, 0, 1, 1).unwrap().attachment_id;
+    s.lock().unwrap();
+    let (pb, b) = device(&f, "b.bin");
+    let s = unlock(&c, "pw").unwrap();
+    s.delete(id.clone()).unwrap();
+    let sb = unlock(&b, "pw").unwrap();
+    sb.save(Some(id.clone()), EntryKind::Note, None, "n".into(), "still needed".into()).unwrap();
+    sb.lock().unwrap();
+
+    c.merge_from(pb.clone(), u32::MAX).unwrap().blocks();
+    if s.reload().unwrap() > 0 {
+        c.merge_from(pb, u32::MAX).unwrap().blocks();
+        s.reload().unwrap();
+    }
+    // The delete and the edit are concurrent: the edit is a live head, so the entry stays.
+    let e = s.entry(id).unwrap().expect("the edited entry is there");
+    assert_eq!(e.body, "still needed");
+    assert_eq!(s.attachment_data(photo).unwrap(), vec![4; 6000]);
+}
+#[test]
+fn a_wipe_rule_holds_against_the_sync_file_on_this_device() {
+    let f = Fixture::new();
+    let c = f.open();
+    two_vaults(&c);
+    let d = unlock(&c, "D").unwrap();
+    c.arm_wipe(d.clone(), "R".into()).unwrap();
+    d.lock().unwrap();
+    let cloud = path_of(&f, "cloud.bin");
+    c.backup_to(cloud.clone()).unwrap(); // the sync file still holds R
+
+    unlock(&c, "D").unwrap().lock().unwrap(); // the rule fires
+    assert_eq!(c.merge_from(cloud, u32::MAX).unwrap().blocks(), 0, "the sync file brings nothing back");
+    assert!(unlock(&c, "R").is_none());
+    // Nothing of R is left for whoever later gets its password: no block matches its locator.
+    let salt = Heap::new(&f.path).read_salt().unwrap();
+    let pk = PasswordKeys::derive("R", &salt).unwrap();
+    assert!(blocks_of(&f.path).iter().all(|b| !locator::matches(&pk.loc, &b[..NONCE_LEN])));
+    assert_eq!(titles(&unlock(&c, "D").unwrap()), ["groceries"]);
+}
+
+#[test]
+fn a_deleted_vault_stays_deleted_after_a_merge() {
+    let f = Fixture::new();
+    let c = f.open();
+    two_vaults(&c);
+    let old = path_of(&f, "old.bin");
+    c.backup_to(old.clone()).unwrap();
+    c.delete_vault(unlock(&c, "R").unwrap()).unwrap();
+    assert_eq!(c.merge_from(old, u32::MAX).unwrap().blocks(), 0);
+    assert!(unlock(&c, "R").is_none());
+}
 #[test]
 fn merge_refuses_another_container() {
     let f = Fixture::new();

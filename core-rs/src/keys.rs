@@ -118,6 +118,15 @@ impl BlockCipher {
         block.len() >= NONCE_LEN + 16 && block[NONCE_LEN..NONCE_LEN + 16] == crypto::keyed_hash16(erase, &block[..NONCE_LEN])
     }
 
+    /// What shredding another vault leaves (spec §8.2, §10.1): the random part of the nonce
+    /// stays, so a merge counts the block as already here, while the locator and the body are
+    /// new random bytes, so the destroyed vault's keys find nothing.
+    pub fn shredded(&self, nonce: &Nonce) -> Vec<u8> {
+        let mut b = nonce[..R_LEN].to_vec();
+        b.extend_from_slice(&crypto::random_bytes(BLOCK_SIZE - R_LEN));
+        b
+    }
+
     /// Own placeholder left behind by purge before 0.4.0 (spec §6.5).
     pub fn pad(&self, pad_loc: &Key) -> Vec<u8> {
         let mut b = locator::nonce(pad_loc).to_vec();

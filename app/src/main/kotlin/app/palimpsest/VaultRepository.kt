@@ -182,7 +182,14 @@ class VaultRepository(private val file: File, private val transfers: File) {
 
     private fun mergeFile(copy: File, limit: UInt): MergeResult {
         val result = container.mergeFrom(copy.absolutePath, limit)
-        if (result is MergeResult.Merged && result.blocks > 0u) runCatching { _session.value?.reload() }
+        if (result is MergeResult.Merged && result.blocks > 0u) {
+            // Attachments erased here but referred to again come in with a second pass.
+            val healed = runCatching { _session.value?.reload() }.getOrNull() ?: 0u
+            if (healed > 0u) {
+                container.mergeFrom(copy.absolutePath, UInt.MAX_VALUE)
+                runCatching { _session.value?.reload() }
+            }
+        }
         return result
     }
 
