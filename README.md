@@ -85,6 +85,44 @@ anyone holding the file:
 - Backup and device transfer are disabled. Plaintext never touches the disk outside the
   encrypted container.
 
+## Syncing between phones
+
+Palimpsest has no internet access, so it syncs through one file that another app moves for
+it: Google Drive, Syncthing, a Cryptomator vault, or anything else that shows up in the
+system file picker. Proton Drive's file picker support currently stalls on folder listings
+and is not reliable for this.
+
+**First phone**
+1. Settings → Backup and transfer → **Sync with a cloud file** → **New file**.
+2. Pick a folder in your drive and save. The file gets a neutral name such as
+   `sync-20261112-1430.bin`.
+3. Wait for "Synced", then let the drive app finish uploading the file.
+
+**Every other phone**
+1. Install Palimpsest and open it once.
+2. Settings → Backup and transfer → **Sync with a cloud file** → **Existing file**, and pick
+   the same file.
+3. The app tells you the file holds another container: a new phone starts a container of its
+   own, and only copies of one container can be merged. Choose **Replace with the sync file**
+   and type the password of any vault in it. Vaults that exist only on this phone are lost, so
+   export them first if you need them and import them afterwards.
+
+From then on each phone syncs on its own: when the app starts, when a vault is unlocked or
+locked, when you leave the app (at most every 15 minutes) and with **Sync now**. Sync needs no
+password, merges every vault at once, and never shows which vaults exist. Edits made on two
+phones before they sync are both kept; if they touched the same entry, the entry offers the
+other version to merge by hand.
+
+Good to know:
+- Every upload is one more copy of the file, and drives keep old versions. With those copies
+  and the password of one vault, an adversary can tell from the file's growth that another,
+  hidden vault exists. Keep a hidden vault less active than the others. See the
+  [threat model](docs/threat-model.md), R3 and R13.
+- A vault destroyed on one phone (deleted, or by the wipe rule) stays destroyed there, even
+  after syncing, but other phones you sync with still hold it.
+- **Merge with a copy** (same settings section) does one sync by hand with any copy of the
+  container, such as an older backup.
+
 ## How it is built
 
 | Part | What |
