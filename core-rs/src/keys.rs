@@ -26,8 +26,6 @@ pub struct VaultKeys {
     pub blob_loc: Key,
     pub pad_loc: Key,
     pub blob_nonce: Key,
-    /// Marks the vault's own erased blocks (spec §8.2): erasing keeps a block's nonce.
-    pub erase: Key,
 }
 
 impl VaultKeys {
@@ -38,7 +36,6 @@ impl VaultKeys {
             blob_loc: crypto::kdf(v, 3, CTX_VK),
             pad_loc: crypto::kdf(v, 4, CTX_VK),
             blob_nonce: crypto::kdf(v, 5, CTX_VK),
-            erase: crypto::kdf(v, 6, CTX_VK),
         }
     }
 
@@ -101,23 +98,20 @@ impl BlockCipher {
         crypto::random_bytes(BLOCK_SIZE)
     }
 
-    /// What purge leaves of an own block (spec §8.2): the same nonce, so a merge counts the
-    /// block as already here and never brings the old one back, then a mark only the vault can
-    /// check, then random bytes. Not an AEAD seal: a new plaintext under the old nonce and key
-    /// would give away the old one.
-    pub fn erased(&self, erase: &Key, nonce: &Nonce) -> Vec<u8> {
+    /// What purge leaves of an own block (spec §8.2): a PAD (§6.5) that keeps the random part
+    /// of the old nonce. A merge counts it as the old block, already here, and never brings
+    /// that back; the vault finds its erased blocks by locator, without reading them; and to
+    /// anyone without the key it looks like [BlockCipher::shredded]: the same 16 bytes, the
+    /// rest new. Not an AEAD seal under the old nonce: a second plaintext under one nonce and
+    /// key would give the first away.
+    pub fn erased(&self, pad_loc: &Key, nonce: &Nonce) -> Vec<u8> {
+        let r = &nonce[..R_LEN];
         let mut b = Vec::with_capacity(BLOCK_SIZE);
-        b.extend_from_slice(nonce);
-        b.extend_from_slice(&crypto::keyed_hash16(erase, nonce));
-        b.extend_from_slice(&crypto::random_bytes(BLOCK_SIZE - NONCE_LEN - 16));
+        b.extend_from_slice(r);
+        b.extend_from_slice(&locator::of(pad_loc, r));
+        b.extend_from_slice(&crypto::random_bytes(BLOCK_SIZE - NONCE_LEN));
         b
     }
-
-    /// Whether lock (or at least its first 40 bytes) is one [BlockCipher::erased] left.
-    pub fn is_erased(&self, erase: &Key, block: &[u8]) -> bool {
-        block.len() >= NONCE_LEN + 16 && block[NONCE_LEN..NONCE_LEN + 16] == crypto::keyed_hash16(erase, &block[..NONCE_LEN])
-    }
-
     /// What shredding another vault leaves (spec §8.2, §10.1): the random part of the nonce
     /// stays, so a merge counts the block as already here, while the locator and the body are
     /// new random bytes, so the destroyed vault's keys find nothing.

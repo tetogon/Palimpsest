@@ -311,8 +311,10 @@ pub(crate) struct Inner {
     blob_blocks: HashMap<Nonce, u32>,
     /// BLOB blocks written in this session (same reasoning as [Inner::born]).
     born_blocks: HashMap<u32, u64>,
-    /// Nonces of own BLOB blocks already erased (spec §8.2); a re-import must not use them.
-    erased_blobs: HashSet<Nonce>,
+    /// Own PAD blocks by the random part of their nonce. An erased block keeps the old
+    /// block's `r` (spec §8.2), so this says which blocks this device erased, without reading
+    /// any: attachments referred to again are healed by it, and re-imports avoid those seeds.
+    pad_r: HashMap<[u8; R_LEN], u32>,
     /// Blocks of referenced attachments found erased at load and turned into chaff (see
     /// [Inner::heal_erased_attachments]): a merge right after brings the real ones.
     pub healed: u32,
@@ -334,6 +336,11 @@ pub enum PurgeMode {
 
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// The random part of a nonce: what a merge knows a block by (spec §7.3).
+fn r_of(n: &Nonce) -> [u8; R_LEN] {
+    n[..R_LEN].try_into().expect("16 bytes")
 }
 
 pub(crate) fn random_id() -> Id {
@@ -365,12 +372,14 @@ impl Inner {
 
         let mut meta = Vec::new();
         let mut pad_blocks = BTreeSet::new();
+        let mut pad_r = HashMap::new();
         let mut blob_blocks = HashMap::new();
         for (i, n) in nonces.iter().enumerate() {
             if locator::matches(&keys.meta_loc, n) {
                 meta.push(i as u32);
             } else if locator::matches(&keys.pad_loc, n) {
                 pad_blocks.insert(i as u32);
+                pad_r.insert(r_of(n), i as u32);
             } else if locator::matches(&keys.blob_loc, n) {
                 blob_blocks.insert(*n, i as u32);
             }
@@ -378,10 +387,6 @@ impl Inner {
 
         let mut assembler = Assembler::default();
         heap.read_blocks(&meta, |i, block| {
-            if cipher.is_erased(&keys.erase, &block) {
-                pad_blocks.insert(i);
-                return;
-            }
             if let Some(frame) = cipher.open(&keys.enc, &block).and_then(|pt| Frame::decode(&pt)) {
                 if frame.kind == Kind::Op {
                     assembler.add(frame, i);
@@ -416,12 +421,11 @@ impl Inner {
             born: HashMap::new(),
             blob_blocks,
             born_blocks: HashMap::new(),
-            erased_blobs: HashSet::new(),
+            pad_r,
             healed: 0,
             nonce_cache: HashMap::new(),
             revoked,
         };
-        inner.forget_erased_blobs(heap, cipher)?;
         inner.healed = inner.heal_erased_attachments(heap, cipher)?;
         inner.recompute(heap, cipher)?;
         Ok(inner)
@@ -676,35 +680,13 @@ impl Inner {
             && self.ops.get(id).map(|o| o.entry_id() != SETTINGS_ID).unwrap_or(false)
     }
 
-    /// Own BLOB blocks that no operation refers to and that an earlier purge already erased:
-    /// they keep their nonce (and locator) for good, so they are told apart by the mark and
-    /// set aside instead of counting as waiting to be erased.
-    fn forget_erased_blobs(&mut self, heap: &Heap, cipher: &BlockCipher) -> Result<()> {
-        let referenced = self.blob_nonces_of(false)?;
-        let orphans: Vec<(Nonce, u32)> = self.blob_blocks.iter().filter(|(n, _)| !referenced.contains(*n)).map(|(n, at)| (*n, *at)).collect();
-        let erase = &self.keys()?.erase;
-        let mut gone = Vec::new();
-        for (n, at) in orphans {
-            if cipher.is_erased(erase, &heap.read_block(at)?) {
-                gone.push(n);
-            }
-        }
-        for n in gone {
-            if let Some(at) = self.blob_blocks.remove(&n) {
-                self.pad_blocks.insert(at);
-            }
-            self.erased_blobs.insert(n);
-        }
-        Ok(())
-    }
-
     /// An attachment this device erased when nothing referred to it, referred to again by a
     /// revision from another device (one phone removed the photo while another edited the
-    /// text). Its erased blocks keep their nonces, so merging would never bring the real ones:
-    /// they become plain chaff with fresh nonces instead, and the next merge takes the real
-    /// blocks. An attachment is erased whole, so its first part tells: one read per attachment.
+    /// text). Its erased parts are own PADs keeping the parts' `r`, so merging would never
+    /// bring the real ones: they become plain chaff with fresh nonces instead, and the next
+    /// merge takes the real blocks. Every part is checked, by nonce alone: no block is read.
     fn heal_erased_attachments(&mut self, heap: &Heap, cipher: &BlockCipher) -> Result<u32> {
-        let seeds: Vec<(Id, u32)> = self
+        let seeds: HashSet<(Id, u32)> = self
             .ops
             .values()
             .filter_map(|o| match o {
@@ -712,19 +694,15 @@ impl Inner {
                 Op::Delete(_) => None,
             })
             .flatten()
-            .collect::<HashSet<_>>()
-            .into_iter()
             .collect();
         let mut writes = Vec::new();
         for (seed, parts) in seeds {
-            let nonces = self.part_nonces(&seed, parts)?;
-            let Some(&first) = nonces.first().and_then(|n| self.blob_blocks.get(n)) else { continue };
-            if !cipher.is_erased(&self.keys()?.erase, &heap.read_block(first)?) {
-                continue;
-            }
-            for n in &nonces {
-                self.erased_blobs.remove(n);
-                if let Some(at) = self.blob_blocks.remove(n) {
+            for n in self.part_nonces(&seed, parts)? {
+                if self.blob_blocks.contains_key(&n) {
+                    continue;
+                }
+                if let Some(at) = self.pad_r.remove(&r_of(&n)) {
+                    self.pad_blocks.remove(&at);
                     writes.push((at, cipher.chaff()));
                 }
             }
@@ -732,7 +710,6 @@ impl Inner {
         heap.overwrite(&writes)?;
         Ok(writes.len() as u32)
     }
-
     /// Erases blocks of replaced revisions in place, keeping their nonces (spec §8.2): a merge
     /// with a copy that still has them then finds them here already and does not bring them
     /// back. Blocks born after the latest copy left the device are erased at once even in
@@ -747,12 +724,16 @@ impl Inner {
             }
             self.ops.remove(id);
         }
-        let erase = &self.keys.as_ref().ok_or(CoreError::Locked)?.erase;
+        let pad_loc = &self.keys.as_ref().ok_or(CoreError::Locked)?.pad_loc;
         let mut writes = Vec::new();
         if !targets.is_empty() {
             let nonces = heap.read_nonces()?;
-            self.pad_blocks.extend(targets.iter().copied());
-            writes.extend(targets.into_iter().map(|b| (b, cipher.erased(erase, &nonces[b as usize]))));
+            for b in targets {
+                let n = &nonces[b as usize];
+                self.pad_blocks.insert(b);
+                self.pad_r.insert(r_of(n), b);
+                writes.push((b, cipher.erased(pad_loc, n)));
+            }
         }
         // BLOBs nobody refers to any more: removed attachments, deleted or replaced entries.
         let manual = self.purge_mode() == PurgeMode::Manual;
@@ -763,12 +744,12 @@ impl Inner {
             .filter(|(n, at)| !referenced.contains(*n) && (everything || !manual || self.born_blocks.get(*at) == Some(&copies)))
             .map(|(n, at)| (*n, *at))
             .collect();
-        let erase = &self.keys.as_ref().ok_or(CoreError::Locked)?.erase;
+        let pad_loc = &self.keys.as_ref().ok_or(CoreError::Locked)?.pad_loc;
         for (n, at) in orphans {
             self.blob_blocks.remove(&n);
-            self.erased_blobs.insert(n);
             self.pad_blocks.insert(at);
-            writes.push((at, cipher.erased(erase, &n)));
+            self.pad_r.insert(r_of(&n), at);
+            writes.push((at, cipher.erased(pad_loc, &n)));
         }
         heap.overwrite(&writes)?;
         Ok(writes.len() as u32)
@@ -984,7 +965,7 @@ impl Inner {
         fresh.last_hlc = fresh.last_hlc.max(self.last_hlc);
         fresh.born = std::mem::take(&mut self.born);
         fresh.born_blocks = std::mem::take(&mut self.born_blocks);
-        fresh.erased_blobs.extend(self.erased_blobs.drain().filter(|n| !fresh.blob_blocks.contains_key(n)));
+
         let healed = fresh.healed;
         *self = fresh;
         Ok(healed)
@@ -1062,6 +1043,7 @@ impl Inner {
             self.keywrap_index = *k;
         }
         self.pad_blocks = self.pad_blocks.iter().filter_map(|&b| mapping[b as usize]).collect();
+        self.pad_r = self.pad_r.iter().filter_map(|(r, &b)| mapping[b as usize].map(|m| (*r, m))).collect();
         self.blob_blocks = self.blob_blocks.iter().filter_map(|(n, &b)| mapping[b as usize].map(|m| (*n, m))).collect();
         self.born_blocks = self.born_blocks.iter().filter_map(|(&b, &e)| mapping[b as usize].map(|m| (m, e))).collect();
     }
@@ -1155,7 +1137,7 @@ impl Inner {
             }
             let s = crypto::keyed_hash16_of(&self.keys()?.blob_nonce, &parts_of);
             let n = self.part_nonces(&s, parts)?;
-            if !n.iter().any(|x| self.erased_blobs.contains(x)) {
+            if !n.iter().any(|x| self.pad_r.contains_key(&r_of(x))) {
                 break (s, n);
             }
             round += 1;

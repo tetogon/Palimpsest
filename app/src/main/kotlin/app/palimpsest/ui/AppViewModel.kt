@@ -34,6 +34,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 data class Draft(
@@ -170,6 +171,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         repo.onBackground = { session ->
             session?.let(::autosave)
             autoSync(throttled = true)
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                delay(AUTOSAVE_MS)
+                repo.session.value?.let { s -> runCatching { autosave(s) } }
+            }
         }
         // The session's last blocks (its end chaff) are written at lock: send them out then.
         repo.afterLock = { viewModelScope.launch(Dispatchers.IO) { autoSync() } }
@@ -958,9 +965,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The text of the open draft, while the editor stays open, when the app goes to the
-     * background: the system may kill it there. Not on a timer: every save is a commit with
-     * its own portion of chaff, and the T5 model counts writes, not minutes.
+     * The text of the open draft, while the editor stays open: when the app goes to the
+     * background (the system may kill it there) and every [AUTOSAVE_MS] while it has changes,
+     * so a crash loses two minutes at most. Not more often: every save is a commit with its own
+     * portion of chaff (docs/t5-simulation.md counts each such save as a write).
      */
     private fun autosave(session: Session): Unit = synchronized(saveLock) {
         val d = draft() ?: return
@@ -1028,6 +1036,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         const val WRONG_PASSWORD_DELAY_MS = 1_000L
         private const val EMBED_SIDE = 1440
         const val SYNC_EVERY_MS = 15 * 60_000L
+        const val AUTOSAVE_MS = 120_000L
     }
 
     private fun work(block: () -> Unit) {

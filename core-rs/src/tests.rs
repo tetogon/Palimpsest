@@ -1122,6 +1122,59 @@ fn an_entry_deleted_here_and_edited_elsewhere_keeps_its_photo() {
     assert_eq!(s.attachment_data(photo).unwrap(), vec![4; 6000]);
 }
 #[test]
+fn a_half_erased_photo_is_healed_part_by_part() {
+    let f = Fixture::new();
+    let c = f.open();
+    let s = create(&c, "pw");
+    let id = s.save(None, EntryKind::Note, None, "n".into(), "text".into()).unwrap();
+    let data: Vec<u8> = (0..12_000u32).map(|i| (i % 251) as u8).collect();
+    let photo = s.add_attachment(id.clone(), data.clone(), "image/jpeg".into(), None, 0, 1, 1).unwrap().attachment_id;
+    s.lock().unwrap();
+    let (pb, b) = device(&f, "b.bin");
+    let blob_loc = locators_of(&c, &f.path, "pw").swap_remove(2);
+    let before = blocks_of(&f.path);
+    let s = unlock(&c, "pw").unwrap();
+    s.remove_attachment(id.clone(), photo.clone()).unwrap();
+    s.lock().unwrap();
+    // As if the erasing stopped halfway: one of the photo's erased parts gets its old bytes back.
+    let after = blocks_of(&f.path);
+    let parts: Vec<usize> =
+        (0..before.len()).filter(|&i| before[i] != after[i] && locator::matches(&blob_loc, &before[i][..NONCE_LEN])).collect();
+    assert_eq!(parts.len(), 3, "12 000 bytes are three parts, all erased");
+    Heap::new(&f.path).overwrite(&[(parts[1] as u32, before[parts[1]].clone())]).unwrap();
+
+    let sb = unlock(&b, "pw").unwrap();
+    sb.save(Some(id.clone()), EntryKind::Note, None, "n".into(), "edited there".into()).unwrap();
+    sb.lock().unwrap();
+    c.merge_from(pb.clone(), u32::MAX).unwrap().blocks();
+    let s = unlock(&c, "pw").unwrap();
+    c.merge_from(pb, u32::MAX).unwrap().blocks();
+    s.reload().unwrap();
+    assert_eq!(s.attachment_data(photo).unwrap(), data);
+}
+
+#[test]
+fn erasing_and_shredding_look_the_same_without_a_key() {
+    let f = Fixture::new();
+    let c = f.open();
+    two_vaults(&c);
+    let before = blocks_of(&f.path);
+    // One vault erases an old revision, the other is destroyed.
+    let d = unlock(&c, "D").unwrap();
+    let id = d.entries().unwrap()[0].entry_id.clone();
+    d.save(Some(id), EntryKind::Note, None, "groceries".into(), "milk".into()).unwrap();
+    d.lock().unwrap();
+    c.delete_vault(unlock(&c, "R").unwrap()).unwrap();
+    let after = blocks_of(&f.path);
+    let changed: Vec<usize> = (0..before.len()).filter(|&i| before[i] != after[i]).collect();
+    assert!(changed.len() >= 4);
+    // Every changed block keeps the first 16 bytes and nothing else: no way to tell which is which.
+    for i in changed {
+        assert_eq!(before[i][..R_LEN], after[i][..R_LEN]);
+        assert_ne!(before[i][R_LEN..NONCE_LEN], after[i][R_LEN..NONCE_LEN]);
+    }
+}
+#[test]
 fn a_wipe_rule_holds_against_the_sync_file_on_this_device() {
     let f = Fixture::new();
     let c = f.open();
