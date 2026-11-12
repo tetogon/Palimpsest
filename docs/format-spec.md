@@ -345,7 +345,16 @@ should unlock speed need one (§11).
 ### 7.3 Sync
 
 `merge(A, B) = (salt, A.blocks ∪ B.blocks)` for equal salt blocks. Merging works **without a
-password** and without knowing how many vaults the container holds.
+password** and without knowing how many vaults the container holds. A block is known by the
+random part `r` of its nonce (its first 16 bytes): a block of B whose `r` is already in A is
+not taken. Erasing (§8.2) and shredding keep `r`, so neither can be undone by a merge on the
+device that did it.
+
+An attachment that this device erased because nothing referred to it can be referred to again
+by a revision from another device (one phone removes a photo while another edits the text).
+At load, the first part of every referenced attachment is checked; an erased one has all its
+blocks turned into chaff with fresh nonces, and the same copy is merged once more to bring the
+real blocks.
 
 The transport (a folder, WebDAV, a server) carries blocks and the salt block. Segmenting and
 the protocol are described separately. Requirements for a transport:
@@ -398,10 +407,12 @@ away. The file size does not change. (Before 0.4.0 a fresh PAD with a new nonce 
 instead, §6.5; such PADs stay valid.)
 
 Shredding **another** vault (the wipe rule, §10.1; deleting a vault, §10.3) and the old
-KEYWRAP of a password change keep writing chaff with a fresh nonce: a block that still matched
-a password's locator but did not decrypt would tell whoever later gets that password that the
-vault existed. The price is that a wiped or deleted vault comes back from copies made before,
-a sync file included; the app warns about it.
+KEYWRAP of a password change write `r ‖ random[8] ‖ random[4072]`: the random part of the
+nonce stays, the locator and the body are new. No block matches the destroyed vault's
+locators any more, so whoever later gets its password finds nothing (a kept locator over an
+undecryptable body would tell them the vault existed), and a merge counts the blocks as
+already here, so a sync file cannot bring the vault back **on this device**. Other devices and
+copies that still have the vault keep it.
 
 An attachment's part nonces are computed from its seed (§6.4), so an erased attachment's
 nonces stay taken: an import that would give the same content the same seed again (§11.7)
@@ -488,8 +499,9 @@ wipe_target = K_pw_loc(R)[32] ‖ K_meta_loc(R)[32] ‖ K_blob_loc(R)[32] ‖ K_
 
 At the next unlock of D, whoever does it:
 1. Every block matching any of R's four locators (KEYWRAP, OP, BLOB, PAD) is overwritten
-   **in place** with random bytes. The file size does not change, the overwritten blocks are
-   indistinguishable from chaff.
+   **in place** as in §8.2 (the nonce's random part stays, the rest is random). The file size
+   does not change, the overwritten blocks are indistinguishable from chaff, and a sync does
+   not bring them back on this device.
 2. A new revision of the settings without `wipe_target` is written; the old revision is
    overwritten as in §8.2. Whoever opens D's settings after the unlock does not see the rule.
 3. D is shown as usual. D's password keeps working.
