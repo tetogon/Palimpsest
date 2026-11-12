@@ -97,7 +97,6 @@ password re-encrypts only the KEYWRAP). From `V`:
 | 3 | `K_blob_loc` | locator of attachment blocks |
 | 4 | `K_pad_loc` | locator of PAD |
 | 5 | `K_blob_nonce` | derivation of the nonces of attachment parts (§6.4) |
-| 6 | `K_erase` | the mark on the vault's own erased blocks (§8.2) |
 
 `kdf(V, id, CTX_VK)`.
 
@@ -352,9 +351,10 @@ device that did it.
 
 An attachment that this device erased because nothing referred to it can be referred to again
 by a revision from another device (one phone removes a photo while another edits the text).
-At load, the first part of every referenced attachment is checked; an erased one has all its
-blocks turned into chaff with fresh nonces, and the same copy is merged once more to bring the
-real blocks.
+At load, every part of every referenced attachment is checked by nonce alone: a part missing
+from the vault's BLOB blocks whose `r` belongs to one of its own PADs was erased here. Such a
+PAD becomes chaff with a fresh nonce, and the same copy is merged once more to bring the real
+blocks. No block is read, and an attachment erased only halfway (a cut write) heals too.
 
 The transport (a folder, WebDAV, a server) carries blocks and the salt block. Segmenting and
 the protocol are described separately. Requirements for a transport:
@@ -392,19 +392,21 @@ losing them would bring a deleted entry back or give an old password its power b
 
 ### 8.2 Physical deletion (purge)
 
-Every block of a dead object is overwritten **in place**, and keeps its nonce:
+Every block of a dead object is overwritten **in place** with a PAD of the same vault that
+keeps the random part `r` of the old nonce:
 
 ```
-erased = nonce ‖ BLAKE2b-128(key = K_erase, msg = nonce) ‖ random[4056]
+erased = r ‖ loc(K_pad_loc, r) ‖ random[4072]
 ```
 
-To anyone without the vault key it is a nonce and random bytes, like any block. The vault
-recognises its own erased blocks by the mark and skips them. Keeping the nonce matters for
-merging (§7.3): a copy that still has the old block offers nothing this file lacks, so erased
-content never comes back from a backup, a sync file or another device. A new body is not
-sealed under `K_enc`: a second plaintext under the same nonce and key would give the first one
-away. The file size does not change. (Before 0.4.0 a fresh PAD with a new nonce was written
-instead, §6.5; such PADs stay valid.)
+Keeping `r` matters for merging (§7.3): a copy that still has the old block offers nothing
+this file lacks, so erased content never comes back from a backup, a sync file or another
+device. The vault finds its own erased blocks by locator, from the nonce cache, without
+reading them. To anyone without the vault key an erased block and a shredded one (below) look
+the same: the first 16 bytes stayed, the rest is new. A new body is not sealed under `K_enc`:
+a second plaintext under the same nonce and key would give the first one away. The file size
+does not change. (Before 0.4.0 a PAD with a fresh `r` was written instead, §6.5; such PADs
+stay valid.)
 
 Shredding **another** vault (the wipe rule, §10.1; deleting a vault, §10.3) and the old
 KEYWRAP of a password change write `r ‖ random[8] ‖ random[4072]`: the random part of the

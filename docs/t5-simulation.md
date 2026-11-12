@@ -16,6 +16,9 @@ fixed seed.
 * B's hidden vault: 0.2 / 1 / 3 sessions a day with the same writes. In 15% of the writes an
   entry from an earlier session is edited.
 * Entry size: log-normal, median 700 bytes; almost always one block.
+* A write is one commit. The app also saves a draft every 2 minutes while it has changes and
+  when it goes to the background, each save a commit with its own chaff: a long writing
+  session counts as one write per 2 minutes of typing, more than the model's 0.8 a session.
 * Chaff comes from the **production policy** `palimpsest_core::chaff` with a deterministic
   generator.
 
