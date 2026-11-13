@@ -1,0 +1,13 @@
+# Proposes new commits for the pinned actions (each pinned to a full SHA, its version in a
+# comment). A release has to age two weeks first: a hijacked release is usually caught by then.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
