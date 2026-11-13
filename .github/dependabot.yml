@@ -8,6 +8,10 @@ updates:
       interval: monthly
     cooldown:
       default-days: 14
+    ignore:
+      # Pinned to its stable and nightly branches, not to tags: Dependabot would put the
+      # newest commit of either branch on both lines. Updated by hand.
+      - dependency-name: dtolnay/rust-toolchain
     groups:
       actions:
         patterns: ["*"]
